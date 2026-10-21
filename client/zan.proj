@@ -1,0 +1,4 @@
+name = crawler
+type = gui
+entry = src/main.zan
+target = exe
