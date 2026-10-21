@@ -76,7 +76,7 @@ crawler/
 ## 编译
 
 ```powershell
-pwsh -File client/tools/build.ps1 -PackageProject D:\project\zan-head
+pwsh -File client/tools/build.ps1 -PackageProject D:\project\zan-lang
 ```
 
 `-PackageProject` 指向含 `packages/` 的 zan-lang 仓库（或它的干净 worktree）。
@@ -88,7 +88,7 @@ pwsh -File client/tools/build.ps1 -PackageProject D:\project\zan-head
 ## 测试
 
 ```powershell
-pwsh -File client/tools/test.ps1 -PackageProject D:\project\zan-head
+pwsh -File client/tools/test.ps1 -PackageProject D:\project\zan-lang
 ```
 
 三段全绿才算过：
