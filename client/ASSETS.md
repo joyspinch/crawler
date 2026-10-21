@@ -104,8 +104,9 @@ CrawlerFacing.EnemyFrame(facingRight)    // 怪物同上
 与画布 `0xAARRGGBB` 同一套。
 
 - 构建拷到 `build/crawler/skins/crawler/`（**exe 同级**，`Gui.Styling.Skin.Roots`
-  查的是 `exe/skins/` 与 `exe/assets/skins/`）；控件基线 `base.css` 一起拷到
-  `build/crawler/skins/`。
+  查的是 `exe/skins/` 与 `exe/assets/skins/`）；控件基线 `base.css` **不拷**——
+  zanc 会自动内嵌 stdlib 的 Gui 皮肤基线（含 base.css 与 dark/light），运行时
+  `Skin.BaseCss()` 磁盘找不到就回落到内嵌那份（exe 旁再放一份反而会盖住它）。
 - 启动时 `host.App().UseSkin("dark")` → `UseSkin("crawler")`（顺序反了会被
   默认皮肤盖回去）。
 - 覆写三处：`:root` 令牌（`--primary` / `--bg-*` / `--text-*` / `--border-*` /
