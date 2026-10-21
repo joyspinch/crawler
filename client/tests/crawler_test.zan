@@ -1,0 +1,477 @@
+using System;
+using System.Collections.Generic;
+
+// 地底爬行 · CRAWLER 的玩法断言用例（无头）。
+//
+// 覆盖：地图生成（房间可达 / 同种子可复现）、移动与撞墙、视野迷雾、
+// 遭遇与回合制战斗、药水与金币、拾取、楼梯下潜、死亡结算、
+// 以及三个种子跑完整流程后的状态自洽。
+//
+// 判据：全部断言通过则打印 "crawler_test OK"。
+public class CrawlerTest {
+    static int failures = 0;
+    static int checks = 0;
+
+    static void Ok(bool cond, string label) {
+        checks = checks + 1;
+        if (!cond) {
+            failures = failures + 1;
+            Console.WriteLine("FAIL " + label);
+        }
+    }
+
+    static void Eq(int got, int want, string label) {
+        Ok(got == want, label + " got=" + Convert.ToString(got)
+            + " want=" + Convert.ToString(want));
+    }
+
+    static void EqS(string got, string want, string label) {
+        Ok(got == want, label + " got=" + got + " want=" + want);
+    }
+
+    static void Main() {
+        TestMapGeneration();
+        TestDeterminism();
+        TestMovement();
+        TestVision();
+        TestEnemies();
+        TestCombat();
+        TestItems();
+        TestDoors();
+        TestFloors();
+        TestDeathAndWin();
+        TestFullRuns();
+        if (failures > 0) {
+            Console.WriteLine("crawler_test FAILED checks=" + Convert.ToString(checks)
+                + " failures=" + Convert.ToString(failures));
+            return;
+        }
+        Console.WriteLine("crawler_test OK checks=" + Convert.ToString(checks));
+    }
+
+    // ----- 工具 -----------------------------------------------------------
+
+    static CrawlerGame NewGame(long seed) {
+        CrawlerGame g = new CrawlerGame();
+        g.NewGame(seed);
+        return g;
+    }
+
+    // 找一个"地板格且四邻有墙"的格子，返回它的下标（找不到返回 -1）。
+    static int FindFloorNextToWall(CrawlerMap m) {
+        for (int y = 1; y < CrawlerMap.Height - 1; y = y + 1) {
+            for (int x = 1; x < CrawlerMap.Width - 1; x = x + 1) {
+                if (!m.IsWalkable(x, y)) { continue; }
+                if (m.IsWall(x + 1, y) || m.IsWall(x - 1, y)
+                    || m.IsWall(x, y + 1) || m.IsWall(x, y - 1)) {
+                    return CrawlerMap.Index(x, y);
+                }
+            }
+        }
+        return -1;
+    }
+
+    static int FindDoorSeed() {
+        for (long s = 1; s < 60; s = s + 1) {
+            CrawlerMap m = CrawlerMap.Generate(s);
+            if (m.doorCount > 0) { return (int)s; }
+        }
+        return -1;
+    }
+
+    // ----- 地图生成 -------------------------------------------------------
+
+    static void TestMapGeneration() {
+        for (long s = 1; s <= 3; s = s + 1) {
+            CrawlerMap m = CrawlerMap.Generate(s);
+            Ok(m.roomCx.Count >= 2, "map" + Convert.ToString(s) + " 至少两个房间");
+            Ok(m.floorCount > 100, "map" + Convert.ToString(s) + " 地板格够多 got="
+                + Convert.ToString(m.floorCount));
+            Ok(m.IsWalkable(m.startX, m.startY), "map" + Convert.ToString(s) + " 起点可走");
+            Ok(m.IsStairs(m.stairsX, m.stairsY), "map" + Convert.ToString(s) + " 楼梯存在");
+            Ok(m.AllRoomsReachable(), "map" + Convert.ToString(s) + " 所有房间可达");
+            Ok(m.stairsX != m.startX || m.stairsY != m.startY,
+                "map" + Convert.ToString(s) + " 楼梯不在起点");
+        }
+        // 房间中心本身是可走格（生成器的硬保证）。
+        CrawlerMap m2 = CrawlerMap.Generate(42L);
+        bool centersOk = true;
+        for (int i = 0; i < m2.roomCx.Count; i = i + 1) {
+            if (!m2.IsWalkable(m2.roomCx[i], m2.roomCy[i])) { centersOk = false; }
+        }
+        Ok(centersOk, "所有房间中心可走");
+    }
+
+    // 同一种子两次生成完全一致；不同种子结果不同。
+    static void TestDeterminism() {
+        CrawlerMap a = CrawlerMap.Generate(20261021L);
+        CrawlerMap b = CrawlerMap.Generate(20261021L);
+        bool same = true;
+        for (int i = 0; i < a.tiles.Length; i = i + 1) {
+            if (a.tiles[i] != b.tiles[i]) { same = false; }
+        }
+        Ok(same, "同种子生成结果完全一致");
+        Eq(a.roomCx.Count, b.roomCx.Count, "同种子房间数一致");
+        Eq(a.startX, b.startX, "同种子起点一致");
+        Eq(a.stairsX, b.stairsX, "同种子楼梯一致");
+        Eq(a.doorCount, b.doorCount, "同种子门数一致");
+
+        CrawlerMap c = CrawlerMap.Generate(20261022L);
+        bool differs = false;
+        for (int i = 0; i < a.tiles.Length; i = i + 1) {
+            if (a.tiles[i] != c.tiles[i]) { differs = true; }
+        }
+        Ok(differs, "不同种子生成不同地图");
+    }
+
+    // ----- 移动 -----------------------------------------------------------
+
+    static void TestMovement() {
+        CrawlerGame g = NewGame(7L);
+        int x0 = g.px;
+        int y0 = g.py;
+        int turn0 = g.turn;
+        // 找一块能走的邻格，走过去。
+        int nx = -1;
+        int ny = -1;
+        if (g.map.At(x0 + 1, y0) == CrawlerMap.Floor) { nx = x0 + 1; ny = y0; }
+        else if (g.map.At(x0 - 1, y0) == CrawlerMap.Floor) { nx = x0 - 1; ny = y0; }
+        else if (g.map.At(x0, y0 + 1) == CrawlerMap.Floor) { nx = x0; ny = y0 + 1; }
+        Ok(nx >= 0, "起点旁边有可走格");
+        if (nx >= 0) {
+            bool moved = g.Move(nx - x0, ny - y0);
+            Ok(moved, "走一步成功");
+            Eq(g.px, nx, "走一步后 x 正确");
+            Eq(g.py, ny, "走一步后 y 正确");
+            Eq(g.turn, turn0 + 1, "走一步回合计数 +1");
+        }
+        // 撞墙：不移动、不消耗回合。
+        CrawlerGame w = NewGame(7L);
+        int idx = FindFloorNextToWall(w.map);
+        Ok(idx >= 0, "能找到贴着墙的地板格");
+        if (idx >= 0) {
+            int wx = idx % CrawlerMap.Width;
+            int wy = idx / CrawlerMap.Width;
+            w.px = wx;
+            w.py = wy;
+            int wturn = w.turn;
+            // 朝墙走：优先右，其次左/上/下。
+            int dx = 0;
+            int dy = 0;
+            if (w.map.IsWall(wx + 1, wy)) { dx = 1; dy = 0; }
+            else if (w.map.IsWall(wx - 1, wy)) { dx = -1; dy = 0; }
+            else if (w.map.IsWall(wx, wy + 1)) { dx = 0; dy = 1; }
+            else { dx = 0; dy = -1; }
+            bool movedWall = w.Move(dx, dy);
+            Ok(!movedWall, "撞墙不算移动");
+            Eq(w.px, wx, "撞墙后 x 不变");
+            Eq(w.py, wy, "撞墙后 y 不变");
+            Eq(w.turn, wturn, "撞墙不消耗回合");
+        }
+    }
+
+    // ----- 视野 -----------------------------------------------------------
+
+    static void TestVision() {
+        CrawlerGame g = NewGame(11L);
+        Ok(g.map.IsVisible(g.px, g.py), "玩家所在格可见");
+        Ok(g.map.IsSeen(g.px, g.py), "玩家所在格被记住");
+        // 半径内的格子可见。
+        int r = g.visionRadius;
+        bool nearOk = true;
+        for (int dy = -r; dy <= r; dy = dy + 1) {
+            for (int dx = -r; dx <= r; dx = dx + 1) {
+                if (dx * dx + dy * dy > r * r) { continue; }
+                int nx = g.px + dx;
+                int ny = g.py + dy;
+                if (!g.map.InBounds(nx, ny)) { continue; }
+                if (!g.map.IsVisible(nx, ny)) { nearOk = false; }
+            }
+        }
+        Ok(nearOk, "视野半径内的格子全部可见");
+        // 远处不可见。
+        int fx = -1;
+        int fy = -1;
+        for (int y = 0; y < CrawlerMap.Height; y = y + 1) {
+            for (int x = 0; x < CrawlerMap.Width; x = x + 1) {
+                int dx = x - g.px;
+                int dy = y - g.py;
+                if (dx * dx + dy * dy > (r + 2) * (r + 2)) {
+                    fx = x; fy = y;
+                    break;
+                }
+            }
+            if (fx >= 0) { break; }
+        }
+        Ok(fx >= 0, "找得到视野之外的格子");
+        if (fx >= 0) {
+            Ok(!g.map.IsVisible(fx, fy), "视野之外的格子不可见");
+        }
+        // 走出一步后，视野跟着更新。
+        CrawlerGame h = NewGame(11L);
+        int seenBefore = 0;
+        for (int i = 0; i < h.map.seen.Length; i = i + 1) {
+            if (h.map.seen[i]) { seenBefore = seenBefore + 1; }
+        }
+        Ok(seenBefore > 0, "开局就有被记住的格子");
+        // 远处（视野外）的格子默认没有被记住。
+        bool farUnseen = true;
+        for (int y = 0; y < CrawlerMap.Height; y = y + 1) {
+            for (int x = 0; x < CrawlerMap.Width; x = x + 1) {
+                int dx = x - h.px;
+                int dy = y - h.py;
+                if (dx * dx + dy * dy <= (r + 2) * (r + 2)) { continue; }
+                if (h.map.IsSeen(x, y)) { farUnseen = false; }
+            }
+        }
+        Ok(farUnseen, "视野之外的格子默认没被记住");
+    }
+
+    // ----- 敌人 -----------------------------------------------------------
+
+    static void TestEnemies() {
+        CrawlerGame g = NewGame(5L);
+        Eq(g.enemies.Count, CrawlerEntities.EnemyCount(1), "第一层敌人数量符合公式");
+        Ok(g.AliveEnemies() > 0, "第一层有活着的敌人");
+        // 敌人不与玩家重叠，也不压在楼梯上。
+        bool noOverlap = true;
+        bool notOnStairs = true;
+        for (int i = 0; i < g.enemies.Count; i = i + 1) {
+            CrawlerEnemy e = g.enemies[i];
+            if (e.x == g.px && e.y == g.py) { noOverlap = false; }
+            if (g.map.IsStairs(e.x, e.y)) { notOnStairs = false; }
+            if (e.hp > e.maxHp) { noOverlap = false; }
+        }
+        Ok(noOverlap, "敌人不与玩家重叠且血量合法");
+        Ok(notOnStairs, "敌人不站在楼梯上");
+        // 越深越强。
+        Ok(CrawlerEntities.EnemyHp(CrawlerEntities.SkeletonKind, 5)
+            > CrawlerEntities.EnemyHp(CrawlerEntities.SkeletonKind, 1),
+            "骷髅血量随层数增加");
+        Ok(CrawlerEntities.EnemyDamage(CrawlerEntities.BatKind, 5)
+            > CrawlerEntities.EnemyDamage(CrawlerEntities.BatKind, 1),
+            "蝙蝠伤害随层数增加");
+        Ok(CrawlerEntities.EnemyCount(5) > CrawlerEntities.EnemyCount(1),
+            "越深敌人越多");
+        // 三种怪都有名字与速度差。
+        EqS(CrawlerEntities.EnemyName(CrawlerEntities.SlimeKind), "史莱姆", "史莱姆名字");
+        EqS(CrawlerEntities.EnemyName(CrawlerEntities.SkeletonKind), "骷髅", "骷髅名字");
+        EqS(CrawlerEntities.EnemyName(CrawlerEntities.BatKind), "蝙蝠", "蝙蝠名字");
+        Ok(CrawlerEntities.EnemySpeed(CrawlerEntities.BatKind)
+            > CrawlerEntities.EnemySpeed(CrawlerEntities.SlimeKind),
+            "蝙蝠比史莱姆快");
+    }
+
+    // ----- 战斗 -----------------------------------------------------------
+
+    static void TestCombat() {
+        CrawlerGame g = NewGame(3L);
+        int aliveBefore = g.AliveEnemies();
+        // 手动放一只怪在玩家旁边。
+        CrawlerEnemy foe = new CrawlerEnemy(CrawlerEntities.SlimeKind,
+            g.px + 1, g.py, 10, 10, 4, 1);
+        g.enemies.Add(foe);
+        bool moved = g.Move(1, 0);
+        Ok(!moved, "撞上敌人不算移动");
+        Eq(g.state, CrawlerGame.Combat, "进入战斗状态");
+        Ok(g.foe != null, "战斗有对手");
+        int hpBefore = foe.hp;
+        int playerHp = g.hp;
+        int result = CrawlerCombat.Attack(g);
+        Eq(result, CrawlerCombat.Ongoing, "第一击没打死怪");
+        Ok(foe.hp < hpBefore, "攻击让怪掉血");
+        Ok(g.hp < playerHp, "敌人反击让玩家掉血");
+        Eq(g.turn, 1, "战斗一回合计数 +1");
+        // 打死它。
+        foe.hp = 1;
+        int killsBefore = g.kills;
+        int result2 = CrawlerCombat.Attack(g);
+        Eq(result2, CrawlerCombat.Victory, "第二击打死怪");
+        Eq(g.kills, killsBefore + 1, "击杀数 +1");
+        Eq(g.state, CrawlerGame.Explore, "打完回到探索");
+        Eq(g.AliveEnemies(), aliveBefore, "怪从场上消失");
+        // 逃跑不会崩。
+        CrawlerGame f = NewGame(3L);
+        CrawlerEnemy f2 = new CrawlerEnemy(CrawlerEntities.BatKind,
+            f.px + 1, f.py, 8, 8, 3, 2);
+        f.enemies.Add(f2);
+        f.Move(1, 0);
+        int r = CrawlerCombat.Flee(f);
+        Ok(r == CrawlerCombat.Escaped || r == CrawlerCombat.Failed
+            || r == CrawlerCombat.Defeat, "逃跑有明确结果");
+    }
+
+    // ----- 物品 -----------------------------------------------------------
+
+    static void TestItems() {
+        // 金币。
+        CrawlerGame g = NewGame(9L);
+        int gold0 = g.gold;
+        int tx = g.px + 1;
+        int ty = g.py;
+        if (!g.map.IsWalkable(tx, ty)) { tx = g.px; ty = g.py + 1; }
+        g.items.Add(new CrawlerItem(CrawlerEntities.CoinItem, tx, ty));
+        g.Move(tx - g.px, ty - g.py);
+        Eq(g.gold, gold0 + CrawlerEntities.CoinValue, "拾取金币计数增加");
+        // 药水：回血但不超过上限。
+        CrawlerGame p = NewGame(9L);
+        p.hp = p.maxHp - 5;
+        p.potions = 1;
+        Ok(p.UsePotion(), "喝药水成功");
+        Eq(p.hp, p.maxHp, "药水回血不超过上限");
+        Eq(p.potions, 0, "药水数量 -1");
+        // 满血时喝药水也不超上限。
+        CrawlerGame p2 = NewGame(9L);
+        p2.hp = p2.maxHp;
+        p2.potions = 2;
+        p2.UsePotion();
+        Eq(p2.hp, p2.maxHp, "满血喝药水不超上限");
+        Eq(p2.potions, 1, "药水数量正确");
+        // 没药水时不能喝。
+        CrawlerGame p3 = NewGame(9L);
+        p3.potions = 0;
+        Ok(!p3.UsePotion(), "没药水喝不了");
+        // 钥匙。
+        CrawlerGame k = NewGame(9L);
+        int keys0 = k.keys;
+        k.items.Add(new CrawlerItem(CrawlerEntities.KeyItem, k.px + 1, k.py));
+        k.Move(1, 0);
+        Eq(k.keys, keys0 + 1, "拾取钥匙计数增加");
+    }
+
+    // ----- 铁门 -----------------------------------------------------------
+
+    static void TestDoors() {
+        int seed = FindDoorSeed();
+        Ok(seed > 0, "存在带铁门的地图");
+        if (seed <= 0) { return; }
+        CrawlerGame g = NewGame((long)seed);
+        // 找一扇门，站在它旁边。
+        int dx = -1;
+        int dy = -1;
+        for (int y = 1; y < CrawlerMap.Height - 1 && dx < 0; y = y + 1) {
+            for (int x = 1; x < CrawlerMap.Width - 1 && dx < 0; x = x + 1) {
+                if (!g.map.IsDoor(x, y)) { continue; }
+                if (g.map.IsWalkable(x - 1, y)) { dx = x - 1; dy = y; }
+                else if (g.map.IsWalkable(x + 1, y)) { dx = x + 1; dy = y; }
+                else if (g.map.IsWalkable(x, y - 1)) { dx = x; dy = y - 1; }
+                else if (g.map.IsWalkable(x, y + 1)) { dx = x; dy = y + 1; }
+            }
+        }
+        Ok(dx >= 0, "找得到门旁边的地板格");
+        if (dx < 0) { return; }
+        g.px = dx;
+        g.py = dy;
+        g.keys = 0;
+        int turn0 = g.turn;
+        // 定位玩家旁边的门。
+        int doorX = -1;
+        int doorY = -1;
+        for (int y = 1; y < CrawlerMap.Height - 1 && doorX < 0; y = y + 1) {
+            for (int x = 1; x < CrawlerMap.Width - 1 && doorX < 0; x = x + 1) {
+                if (!g.map.IsDoor(x, y)) { continue; }
+                if (x == dx + 1 && y == dy) { doorX = x; doorY = y; }
+                else if (x == dx - 1 && y == dy) { doorX = x; doorY = y; }
+                else if (x == dx && y == dy + 1) { doorX = x; doorY = y; }
+                else if (x == dx && y == dy - 1) { doorX = x; doorY = y; }
+            }
+        }
+        Ok(doorX >= 0, "定位到门");
+        if (doorX < 0) { return; }
+        bool blocked = g.Move(doorX - g.px, doorY - g.py);
+        Ok(!blocked, "没钥匙开不了门");
+        Eq(g.keys, 0, "没钥匙时钥匙数不变");
+        Eq(g.turn, turn0, "没钥匙时门不消耗回合");
+        // 有钥匙：开门。
+        g.keys = 1;
+        bool opened = g.Move(doorX - g.px, doorY - g.py);
+        Ok(opened, "有钥匙能开门");
+        Eq(g.keys, 0, "开门消耗一把钥匙");
+        Ok(!g.map.IsDoor(doorX, doorY), "门被打开成地板");
+        Ok(g.turn > turn0, "开门消耗一个回合");
+    }
+
+    // ----- 楼层 -----------------------------------------------------------
+
+    static void TestFloors() {
+        CrawlerGame g = NewGame(13L);
+        int depth0 = g.depth;
+        int enemies0 = g.enemies.Count;
+        int stairsX = g.map.stairsX;
+        int stairsY = g.map.stairsY;
+        // 站到楼梯旁边再踩上去。
+        g.px = stairsX;
+        g.py = stairsY - 1;
+        bool moved = g.Move(0, 1);
+        Ok(moved, "踩上楼梯");
+        Eq(g.depth, depth0 + 1, "层数 +1");
+        Ok(g.map != null, "下潜后地图重建");
+        Ok(g.map.stairsX != stairsX || g.map.stairsY != stairsY,
+            "下潜后楼梯位置不同");
+        int seen = 0;
+        for (int i = 0; i < g.map.seen.Length; i = i + 1) {
+            if (g.map.seen[i]) { seen = seen + 1; }
+        }
+        Ok(seen < 400, "下潜后迷雾重置（记住的格子很少）got=" + Convert.ToString(seen));
+        // 直接下潜也行。
+        CrawlerGame d = NewGame(13L);
+        d.Descend();
+        Eq(d.depth, 2, "Descend 后层数 +1");
+        Ok(d.enemies.Count > 0, "新一层有敌人");
+        // 层数越深怪越多。
+        Ok(g.enemies.Count > enemies0, "越深怪越多");
+    }
+
+    // ----- 死亡与通关 -----------------------------------------------------
+
+    static void TestDeathAndWin() {
+        CrawlerGame g = NewGame(17L);
+        g.hp = 5;
+        g.PlayerDied();
+        Eq(g.state, CrawlerGame.Dead, "玩家死亡状态");
+        Eq(g.screen, CrawlerGame.ScreenResult, "死亡进结算面板");
+        Eq(g.hp, 0, "死亡时血量为 0");
+        // 通关：踩着第 4 层的楼梯下到第 5 层。
+        CrawlerGame w = NewGame(17L);
+        w.depth = 4;
+        w.px = w.map.stairsX;
+        w.py = w.map.stairsY - 1;
+        w.Move(0, 1);
+        Eq(w.depth, 5, "到达第 5 层");
+        Eq(w.state, CrawlerGame.Won, "第 5 层算通关");
+        Eq(w.screen, CrawlerGame.ScreenResult, "通关进结算面板");
+    }
+
+    // ----- 完整流程（三个种子） -------------------------------------------
+
+    static void TestFullRuns() {
+        long[] seeds = new long[] { 101L, 202L, 303L };
+        for (int s = 0; s < seeds.Length; s = s + 1) {
+            CrawlerGame g = NewGame(seeds[s]);
+            bool consistent = true;
+            for (int step = 0; step < 600; step = step + 1) {
+                g.AutoStep();
+                if (g.hp > g.maxHp) { consistent = false; }
+                if (g.hp < 0) { consistent = false; }
+                if (g.depth < 1) { consistent = false; }
+                if (g.kills < 0) { consistent = false; }
+                if (g.gold < 0) { consistent = false; }
+                if (g.keys < 0) { consistent = false; }
+                if (g.potions < 0) { consistent = false; }
+                if (g.turn < 0) { consistent = false; }
+                if (!g.map.InBounds(g.px, g.py)) { consistent = false; }
+                for (int i = 0; i < g.enemies.Count; i = i + 1) {
+                    CrawlerEnemy e = g.enemies[i];
+                    if (e.hp > e.maxHp) { consistent = false; }
+                    if (!g.map.InBounds(e.x, e.y)) { consistent = false; }
+                }
+                if (g.state == CrawlerGame.Dead || g.state == CrawlerGame.Won) { break; }
+            }
+            Ok(consistent, "种子" + Convert.ToString(seeds[s]) + " 跑完整流程状态自洽");
+            Ok(g.turn > 0, "种子" + Convert.ToString(seeds[s]) + " 有回合推进");
+            Ok(g.screen == CrawlerGame.ScreenPlaying
+                || g.screen == CrawlerGame.ScreenResult,
+                "种子" + Convert.ToString(seeds[s]) + " 屏幕状态合法");
+        }
+    }
+}

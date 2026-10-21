@@ -1,0 +1,295 @@
+using System;
+using System.Collections.Generic;
+using Gui;
+using Game.Foundation.Gui;
+using Game.Kit;
+
+// 一个可点的动作按钮（菜单/结算面板用）。
+public class CrButton {
+    public string label;
+    public int x;
+    public int y;
+    public int w;
+    public int h;
+    public int kind;      // 0 普通 1 强调
+    public string action;
+
+    public CrButton(string label, string action, int kind, int x, int y, int w, int h) {
+        this.label = label;
+        this.action = action;
+        this.kind = kind;
+        this.x = x;
+        this.y = y;
+        this.w = w;
+        this.h = h;
+    }
+}
+
+// 地底爬行 · CRAWLER 的应用外壳：把玩法（CrawlerGame）、画面
+// （CrawlerView）、声音（CrawlerSfx）、存档设置（GameShell）接到
+// GuiHost 的帧循环上。
+//
+// 画面状态机：菜单 → 游戏中 → 结算 →（再来一局）游戏中。
+public class CrawlerApp : IGuiHostLoop {
+    public GuiHost host;
+    public CrawlerGame game;
+    public CrawlerView view;
+    public GameShell shell;
+    public CrawlerSfx sfx;
+
+    public bool[] held;
+    public int repeatMs;
+    public int frames;
+    public int smokeFrames;
+    public bool smokeMode;
+    public bool demoMode;
+    public bool finished;
+    public bool runRecorded;
+    public int autoTimer;
+    public int endFrames;
+    public string capturePath;
+    public int captureFrame;
+    public List<CrButton> buttons;
+
+    public CrawlerApp() {
+        this.buttons = new List<CrButton>();
+        this.held = new bool[256];
+        this.game = new CrawlerGame();
+        this.view = new CrawlerView();
+        this.shell = new GameShell();
+        this.sfx = new CrawlerSfx();
+        this.frames = 0;
+        this.repeatMs = 0;
+        this.autoTimer = 0;
+        this.runRecorded = false;
+        this.finished = false;
+        this.smokeFrames = 90;
+        this.smokeMode = Environment.GetEnvironmentVariable("CRAWLER_SMOKE") == "1";
+        this.demoMode = Environment.GetEnvironmentVariable("CRAWLER_DEMO") == "1";
+        this.capturePath = Environment.GetEnvironmentVariable("CRAWLER_CAPTURE");
+        this.captureFrame = 60;
+        string framesEnv = Environment.GetEnvironmentVariable("CRAWLER_FRAMES");
+        if (framesEnv != "") { this.smokeFrames = Convert.ToInt32(framesEnv); }
+        this.view.LoadAssets();
+    }
+
+    // ----- IGuiHostLoop ---------------------------------------------------
+
+    public void Start(GuiHost h) {
+        this.host = h;
+        // 设置浮层挂到 HUD 层（标准库控件，盖在画面之上）。
+        h.Hud().Add(this.shell.Overlay().Root());
+        this.game.visionRadius = this.shell.LightRadius();
+        this.game.difficulty = this.shell.Difficulty();
+        this.sfx.enabled = this.shell.Sound();
+        if (this.smokeMode || this.demoMode) {
+            // 冒烟/演示直接进对局：菜单那一帧不跑玩法，测不到真东西。
+            this.StartRun();
+        }
+    }
+
+    public void Event(GuiHost h, int kind, int keycode) {
+        if (kind == 4) { this.OnKeyDown(h, keycode); return; }
+        if (kind == 5) {
+            if (keycode >= 0 && keycode < 256) { this.held[keycode] = false; }
+            return;
+        }
+        if (kind == 3 && keycode == 0) { this.OnClick(h.MouseX(), h.MouseY()); }
+    }
+
+    public void FixedUpdate(GuiHost h, int deltaMilliseconds) { }
+
+    public void Update(GuiHost h, int deltaMilliseconds) {
+        this.shell.Overlay().Tick();
+        this.sfx.Update(deltaMilliseconds);
+        // 帧计数放 Update：窗口不可见时宿主跳过渲染。
+        this.frames = this.frames + 1;
+        this.PlayPendingSfx();
+        this.MaybeRecordRun();
+        if (this.smokeMode || this.demoMode) {
+            this.autoTimer = this.autoTimer + 1;
+            int every = this.demoMode ? 14 : 2;
+            if (this.autoTimer >= every) {
+                this.autoTimer = 0;
+                this.game.AutoStep();
+            }
+        }
+        if (this.game.screen == CrawlerGame.ScreenPlaying
+            && this.game.state == CrawlerGame.Explore) {
+            this.RepeatMove(deltaMilliseconds);
+        }
+        // 冒烟：一局跑完（死了或通关）再留几帧展示结算，然后收尾。
+        if (this.smokeMode && this.runRecorded) {
+            this.endFrames = this.endFrames + 1;
+            if (this.endFrames > 24) {
+                this.Finish();
+                h.RequestStop();
+                return;
+            }
+        }
+        if (this.smokeMode && this.frames >= this.smokeFrames) {
+            this.Finish();
+            h.RequestStop();
+        }
+    }
+
+    public void Render(GuiHost h, Canvas c, double alpha) {
+        int w = h.StageWidth();
+        int hh = h.StageHeight();
+        CDraw.Origin(0, h.ContentTop());
+        this.buttons.Clear();
+        if (this.game.screen == CrawlerGame.ScreenMenu) {
+            this.view.DrawMenu(c, w, hh, this.shell.BestDepth(), this.shell.TotalGold(),
+                this.shell.TotalKills(), this.shell.Clears(), this.shell.Runs());
+            this.buttons.Add(new CrButton("开始新的一局", "start", 1, w / 2 - 110, 508, 220, 50));
+            this.buttons.Add(new CrButton("设置", "settings", 0, w - 110, 8, 90, 32));
+        } else {
+            this.view.DrawGame(c, w, hh, this.game);
+            if (this.game.screen == CrawlerGame.ScreenResult) {
+                this.view.DrawResult(c, this.game, w, hh, this.shell.BestDepth(),
+                    this.shell.TotalGold(), this.shell.TotalKills(),
+                    this.shell.Clears(), this.shell.Runs());
+                this.buttons.Add(new CrButton("再来一局", "start", 1, w / 2 - 230, 596, 200, 46));
+                this.buttons.Add(new CrButton("回到主菜单", "menu", 0, w / 2 + 30, 596, 200, 46));
+                this.buttons.Add(new CrButton("设置", "settings", 0, w - 110, 8, 90, 32));
+            } else {
+                this.buttons.Add(new CrButton("设置", "settings", 0, w - 110, 8, 90, 32));
+            }
+        }
+        for (int i = 0; i < this.buttons.Count; i = i + 1) {
+            CrButton b = this.buttons[i];
+            bool hover = this.host != null
+                && this.host.MouseX() >= b.x && this.host.MouseX() < b.x + b.w
+                && this.host.MouseY() >= b.y && this.host.MouseY() < b.y + b.h;
+            this.view.DrawButton(c, b.label, b.x, b.y, b.w, b.h, b.kind == 1, hover);
+        }
+        if (this.capturePath != "" && this.frames == this.captureFrame) {
+            c.WritePixels(this.capturePath, 0, 0, c.Width(), c.Height());
+            Console.WriteLine("CRAWLER_CAPTURE " + Convert.ToString(c.Width())
+                + "x" + Convert.ToString(c.Height()));
+        }
+    }
+
+    public void Stop(GuiHost h) { this.Finish(); }
+
+    // ----- 输入 -----------------------------------------------------------
+
+    void OnKeyDown(GuiHost h, int keycode) {
+        if (keycode >= 0 && keycode < 256) { this.held[keycode] = true; }
+        if (keycode == 27) { this.shell.Overlay().Toggle(); return; }
+        if (this.shell.Overlay().IsOpen()) { return; }
+        if (keycode == 13 || keycode == 32) {
+            if (this.game.screen == CrawlerGame.ScreenMenu
+                || this.game.screen == CrawlerGame.ScreenResult) {
+                this.StartRun();
+                return;
+            }
+            if (this.game.state == CrawlerGame.Combat) { CrawlerCombat.Attack(this.game); }
+            return;
+        }
+        if (keycode == 70) { this.game.UsePotion(); return; }
+        if (keycode == 82) {
+            if (this.game.state == CrawlerGame.Combat) { CrawlerCombat.Flee(this.game); }
+            return;
+        }
+        if (keycode == 77 && this.game.screen == CrawlerGame.ScreenResult) {
+            this.game.screen = CrawlerGame.ScreenMenu;
+            this.runRecorded = false;
+            return;
+        }
+        // 方向键 / WASD：按一次走一步，按住连续走。
+        if (this.game.screen != CrawlerGame.ScreenPlaying) { return; }
+        if (this.game.state != CrawlerGame.Explore) { return; }
+        if (this.MoveBy(keycode)) { this.repeatMs = 0; }
+    }
+
+    // 持续输入：按住方向键时按固定节奏继续走。
+    void RepeatMove(int deltaMilliseconds) {
+        this.repeatMs = this.repeatMs + deltaMilliseconds;
+        if (this.repeatMs < 220) { return; }
+        this.repeatMs = 0;
+        for (int code = 37; code <= 40; code = code + 1) {
+            if (this.held[code] && this.MoveBy(code)) { return; }
+        }
+        if (this.held[87] && this.MoveBy(87)) { return; }
+        if (this.held[65] && this.MoveBy(65)) { return; }
+        if (this.held[83] && this.MoveBy(83)) { return; }
+        if (this.held[68] && this.MoveBy(68)) { return; }
+    }
+
+    bool MoveBy(int keycode) {
+        if (keycode == 37 || keycode == 65) { return this.game.Move(-1, 0); }
+        if (keycode == 39 || keycode == 68) { return this.game.Move(1, 0); }
+        if (keycode == 38 || keycode == 87) { return this.game.Move(0, -1); }
+        if (keycode == 40 || keycode == 83) { return this.game.Move(0, 1); }
+        return false;
+    }
+
+    void OnClick(int mx, int my) {
+        if (this.shell.Overlay().IsOpen()) { return; }
+        for (int i = 0; i < this.buttons.Count; i = i + 1) {
+            CrButton b = this.buttons[i];
+            if (mx < b.x || mx >= b.x + b.w || my < b.y || my >= b.y + b.h) { continue; }
+            this.DoAction(b.action);
+            return;
+        }
+    }
+
+    void DoAction(string action) {
+        if (action == "start") { this.StartRun(); return; }
+        if (action == "menu") {
+            this.game.screen = CrawlerGame.ScreenMenu;
+            this.runRecorded = false;
+            return;
+        }
+        if (action == "settings") { this.shell.Overlay().Toggle(); }
+    }
+
+    // ----- 一局 -----------------------------------------------------------
+
+    public void StartRun() {
+        this.game.visionRadius = this.shell.LightRadius();
+        this.game.difficulty = this.shell.Difficulty();
+        this.sfx.enabled = this.shell.Sound();
+        long seed = (long)DateTime.GetCurrentUnixMilliseconds();
+        this.game.NewGame(seed);
+        this.game.screen = CrawlerGame.ScreenPlaying;
+        this.runRecorded = false;
+    }
+
+    // 一局结束（死亡或通关）时把成绩记进存档。
+    void MaybeRecordRun() {
+        if (this.runRecorded) { return; }
+        if (this.game.screen != CrawlerGame.ScreenResult) { return; }
+        this.runRecorded = true;
+        this.shell.RecordRun(this.game.depth, this.game.kills, this.game.gold,
+            this.game.state == CrawlerGame.Won);
+    }
+
+    void PlayPendingSfx() {
+        int ev = this.game.lastSfx;
+        if (ev == CrawlerSfxEvent.None) { return; }
+        this.game.lastSfx = CrawlerSfxEvent.None;
+        this.sfx.Play(ev);
+    }
+
+    // ----- 收尾 -----------------------------------------------------------
+
+    void Finish() {
+        if (this.finished) { return; }
+        this.finished = true;
+        this.shell.Save();
+        Console.WriteLine("CRAWLER_SAVE best=" + Convert.ToString(this.shell.BestDepth())
+            + " gold=" + Convert.ToString(this.shell.TotalGold())
+            + " kills=" + Convert.ToString(this.shell.TotalKills())
+            + " clears=" + Convert.ToString(this.shell.Clears())
+            + " runs=" + Convert.ToString(this.shell.Runs()));
+        if (this.smokeMode) {
+            Console.WriteLine("CRAWLER_SMOKE_OK frames=" + Convert.ToString(this.frames)
+                + " depth=" + Convert.ToString(this.game.depth)
+                + " kills=" + Convert.ToString(this.game.kills)
+                + " gold=" + Convert.ToString(this.game.gold)
+                + " turns=" + Convert.ToString(this.game.turn));
+        }
+    }
+}

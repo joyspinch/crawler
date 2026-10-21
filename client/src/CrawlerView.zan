@@ -1,0 +1,383 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Gui;
+using Game.Kit;
+
+// 地牢画面：位图贴图 + 迷雾 + HUD + 菜单/结算面板。
+//
+// 贴图路线（按 REAL_GAME_STANDARD 第 4 节）：地砖/墙是**底板位图**
+// （一张 64×64 的图切 4 块取景变化），角色/怪物/物品各自一张
+// 主体位图（带 alpha），面板与血条是几何绘制（界面部件允许）。
+// 找不到贴图就退回纯色块，不崩。
+public class CrawlerView {
+    public const int DesignW = 1280;
+    public const int DesignH = 800;
+    public const int Tile = 32;
+    public const int ViewCols = 30;
+    public const int ViewRows = 16;
+    public const int ViewW = CrawlerView.ViewCols * CrawlerView.Tile;
+    public const int ViewH = CrawlerView.ViewRows * CrawlerView.Tile;
+    public const int ViewY = 76;
+    public const int HudH = 70;
+    public const int LogY = CrawlerView.ViewY + CrawlerView.ViewH + 12;
+
+    public string floorPath = "";
+    public string wallPath = "";
+    public string doorPath = "";
+    public string stairsPath = "";
+    public string playerPath = "";
+    public string slimePath = "";
+    public string skeletonPath = "";
+    public string batPath = "";
+    public string coinPath = "";
+    public string potionPath = "";
+    public string keyPath = "";
+    public bool assetsReady;
+    // 地图视口左边界：每帧按舞台宽度居中（窗口不是 1280 时也不偏）。
+    public int viewX = (CrawlerView.DesignW - CrawlerView.ViewW) / 2;
+
+    public void LoadAssets() {
+        this.floorPath = CrawlerView.FindAsset("assets/floor.png");
+        this.wallPath = CrawlerView.FindAsset("assets/wall.png");
+        this.doorPath = CrawlerView.FindAsset("assets/door.png");
+        this.stairsPath = CrawlerView.FindAsset("assets/stairs.png");
+        this.playerPath = CrawlerView.FindAsset("assets/player.png");
+        this.slimePath = CrawlerView.FindAsset("assets/slime.png");
+        this.skeletonPath = CrawlerView.FindAsset("assets/skeleton.png");
+        this.batPath = CrawlerView.FindAsset("assets/bat.png");
+        this.coinPath = CrawlerView.FindAsset("assets/coin.png");
+        this.potionPath = CrawlerView.FindAsset("assets/potion.png");
+        this.keyPath = CrawlerView.FindAsset("assets/key.png");
+        this.assetsReady = this.floorPath != "" && this.playerPath != "";
+    }
+
+    static string FindAsset(string rel) {
+        string p = Assets.Find(rel);
+        if (!File.Exists(p)) { return ""; }
+        return p;
+    }
+
+    // ----- 绘制原语 -------------------------------------------------------
+
+    // 带源矩形取景的贴图（源矩形 0,0,0,0 = 整幅图）。
+    void Blit(Canvas c, string path, int dx, int dy, int dw, int dh,
+              int sx, int sy, int sw, int sh) {
+        if (path == "") { return; }
+        string key = CDraw.BlitSource(c, path);
+        if (key == null) { return; }
+        c.BlitImage(key, CDraw.MapX(dx + CDraw.originX), CDraw.MapY(dy + CDraw.originY),
+                    CDraw.MapW(dw), CDraw.MapW(dh), sx, sy, sw, sh);
+    }
+
+    void Text(Canvas c, string s, int x, int y, int size, int color) {
+        if (s == null || s == "") { return; }
+        c.DrawText(CDraw.MapX(x + CDraw.originX), CDraw.MapY(y + CDraw.originY),
+                   s, color, CDraw.MapW(size));
+    }
+
+    void TextCentered(Canvas c, string s, int cx, int y, int size, int color) {
+        if (s == null || s == "") { return; }
+        int tw = c.MeasureText(s, CDraw.MapW(size));
+        this.Text(c, s, cx - tw / 2, y, size, color);
+    }
+
+    void Fill(Canvas c, int x, int y, int w, int h, int color) {
+        CDraw.FillRect(c, x, y, w, h, color);
+    }
+
+    void FillRound(Canvas c, int x, int y, int w, int h, int rad, int color) {
+        CDraw.RoundRectFill(c, x, y, w, h, rad,
+            (color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF, (color >> 24) & 0xFF);
+    }
+
+    // ----- 地图 -----------------------------------------------------------
+
+    int CamX(CrawlerGame g) {
+        int raw = g.px * CrawlerView.Tile + CrawlerView.Tile / 2 - CrawlerView.ViewW / 2;
+        int maxX = CrawlerMap.Width * CrawlerView.Tile - CrawlerView.ViewW;
+        if (raw < 0) { raw = 0; }
+        if (raw > maxX) { raw = maxX; }
+        return raw;
+    }
+
+    int CamY(CrawlerGame g) {
+        int raw = g.py * CrawlerView.Tile + CrawlerView.Tile / 2 - CrawlerView.ViewH / 2;
+        int maxY = CrawlerMap.Height * CrawlerView.Tile - CrawlerView.ViewH;
+        if (raw < 0) { raw = 0; }
+        if (raw > maxY) { raw = maxY; }
+        return raw;
+    }
+
+    // 一格地面/墙/门/楼梯。variant 让同一张底板切出 4 种取景。
+    void DrawTile(Canvas c, int kind, int px, int py, int variant) {
+        if (kind == CrawlerMap.Wall) {
+            if (this.wallPath != "") {
+                this.Blit(c, this.wallPath, px, py, CrawlerView.Tile, CrawlerView.Tile,
+                    (variant % 2) * 32, (variant / 2) * 32, 32, 32);
+            } else {
+                this.Fill(c, px, py, CrawlerView.Tile, CrawlerView.Tile, 0xFF23211F);
+            }
+            return;
+        }
+        if (kind == CrawlerMap.Door) {
+            if (this.doorPath != "") {
+                this.Blit(c, this.doorPath, px, py, CrawlerView.Tile, CrawlerView.Tile, 0, 0, 0, 0);
+            } else {
+                this.Fill(c, px, py, CrawlerView.Tile, CrawlerView.Tile, 0xFF6B4A2A);
+            }
+            return;
+        }
+        if (kind == CrawlerMap.Stairs) {
+            if (this.stairsPath != "") {
+                this.Blit(c, this.stairsPath, px, py, CrawlerView.Tile, CrawlerView.Tile, 0, 0, 0, 0);
+            } else {
+                this.Fill(c, px, py, CrawlerView.Tile, CrawlerView.Tile, 0xFF101820);
+            }
+            return;
+        }
+        if (this.floorPath != "") {
+            this.Blit(c, this.floorPath, px, py, CrawlerView.Tile, CrawlerView.Tile,
+                (variant % 2) * 32, (variant / 2) * 32, 32, 32);
+        } else {
+            this.Fill(c, px, py, CrawlerView.Tile, CrawlerView.Tile, 0xFF2A2724);
+        }
+    }
+
+    void DrawItem(Canvas c, CrawlerItem it, int px, int py) {
+        string path = "";
+        if (it.kind == CrawlerEntities.PotionItem) { path = this.potionPath; }
+        else if (it.kind == CrawlerEntities.KeyItem) { path = this.keyPath; }
+        else { path = this.coinPath; }
+        if (path != "") {
+            this.Blit(c, path, px + 4, py + 4, 24, 24, 0, 0, 0, 0);
+            return;
+        }
+        if (it.kind == CrawlerEntities.PotionItem) { this.Fill(c, px + 8, py + 8, 16, 16, 0xFFC0392B); }
+        else if (it.kind == CrawlerEntities.KeyItem) { this.Fill(c, px + 8, py + 8, 16, 16, 0xFFD9B23C); }
+        else { this.Fill(c, px + 8, py + 8, 16, 16, 0xFFE0B93A); }
+    }
+
+    void DrawEnemy(Canvas c, CrawlerEnemy e, int px, int py) {
+        string path = this.slimePath;
+        if (e.kind == CrawlerEntities.SkeletonKind) { path = this.skeletonPath; }
+        else if (e.kind == CrawlerEntities.BatKind) { path = this.batPath; }
+        if (path != "") {
+            this.Blit(c, path, px, py, CrawlerView.Tile, CrawlerView.Tile, 0, 0, 0, 0);
+        } else {
+            this.Fill(c, px + 4, py + 4, 24, 24, 0xFFB03A3A);
+        }
+        // 血条（界面部件，几何绘制）：贴图之上一条细血条。
+        int w = 24;
+        int barY = py + 1;
+        this.Fill(c, px + 4, barY, w, 3, 0xFF1A1210);
+        int filled = 0;
+        if (e.maxHp > 0) { filled = w * e.hp / e.maxHp; }
+        if (filled < 0) { filled = 0; }
+        if (filled > w) { filled = w; }
+        this.Fill(c, px + 4, barY, filled, 3, 0xFFC0392B);
+    }
+
+    // 地图本体：先铺底，再画"记住"的格子（带迷雾压暗），
+    // 最后画当前视野里的怪与玩家。
+    void DrawMap(Canvas c, int w, int h, CrawlerGame g) {
+        CrawlerMap m = g.map;
+        this.Fill(c, 0, 0, w, h, 0xFF07080A);
+        if (m == null) { return; }
+        int x0 = this.CamX(g) / CrawlerView.Tile;
+        int y0 = this.CamY(g) / CrawlerView.Tile;
+        this.Fill(c, this.viewX, CrawlerView.ViewY, CrawlerView.ViewW, CrawlerView.ViewH, 0xFF0A0B0E);
+        for (int ty = 0; ty < CrawlerView.ViewRows; ty = ty + 1) {
+            for (int tx = 0; tx < CrawlerView.ViewCols; tx = tx + 1) {
+                int mx = x0 + tx;
+                int my = y0 + ty;
+                if (!m.InBounds(mx, my)) { continue; }
+                if (!m.IsSeen(mx, my)) { continue; }
+                int px = this.viewX + tx * CrawlerView.Tile;
+                int py = CrawlerView.ViewY + ty * CrawlerView.Tile;
+                int kind = m.At(mx, my);
+                int variant = (mx * 7 + my * 13) % 4;
+                this.DrawTile(c, kind, px, py, variant);
+                CrawlerItem it = g.ItemAt(mx, my);
+                if (it != null) { this.DrawItem(c, it, px, py); }
+                if (!m.IsVisible(mx, my)) {
+                    this.Fill(c, px, py, CrawlerView.Tile, CrawlerView.Tile, 0xCC05060A);
+                }
+            }
+        }
+        for (int i = 0; i < g.enemies.Count; i = i + 1) {
+            CrawlerEnemy e = g.enemies[i];
+            if (e.dead) { continue; }
+            if (!m.IsVisible(e.x, e.y)) { continue; }
+            int px = this.viewX + (e.x - x0) * CrawlerView.Tile;
+            int py = CrawlerView.ViewY + (e.y - y0) * CrawlerView.Tile;
+            this.DrawEnemy(c, e, px, py);
+        }
+        int ppx = this.viewX + (g.px - x0) * CrawlerView.Tile;
+        int ppy = CrawlerView.ViewY + (g.py - y0) * CrawlerView.Tile;
+        if (this.playerPath != "") {
+            this.Blit(c, this.playerPath, ppx, ppy, CrawlerView.Tile, CrawlerView.Tile, 0, 0, 0, 0);
+        } else {
+            this.Fill(c, ppx + 4, ppy + 4, 24, 24, 0xFFD8CFA0);
+        }
+    }
+
+    // ----- HUD ------------------------------------------------------------
+
+    void Bar(Canvas c, int x, int y, int w, int h, int value, int maxValue, int color) {
+        this.Fill(c, x, y, w, h, 0xFF1B1714);
+        int filled = 0;
+        if (maxValue > 0) { filled = w * value / maxValue; }
+        if (filled < 0) { filled = 0; }
+        if (filled > w) { filled = w; }
+        this.Fill(c, x, y, filled, h, color);
+    }
+
+    void DrawHud(Canvas c, int w, CrawlerGame g) {
+        this.Fill(c, 0, 0, w, CrawlerView.HudH, 0xFF15130F);
+        this.Fill(c, 0, CrawlerView.HudH - 2, w, 2, 0xFF6A5A33);
+        this.Text(c, "地底爬行 · CRAWLER", 20, 8, 20, 0xFFE8DFC8);
+        this.Text(c, "第 " + Convert.ToString(g.depth) + " 层 / 目标第 "
+            + Convert.ToString(CrawlerGame.GoalDepth) + " 层", 300, 12, 16, 0xFFC8B98C);
+        this.Bar(c, 20, 38, 220, 16, g.hp, g.maxHp, 0xFF9A3B32);
+        this.Text(c, "HP " + Convert.ToString(g.hp) + "/" + Convert.ToString(g.maxHp), 250, 38, 15, 0xFFE8DFC8);
+        this.Text(c, "金币 " + Convert.ToString(g.gold), 400, 38, 15, 0xFFE0C060);
+        this.Text(c, "钥匙 " + Convert.ToString(g.keys), 520, 38, 15, 0xFFD9C46A);
+        this.Text(c, "药水 " + Convert.ToString(g.potions), 630, 38, 15, 0xFFD08A8A);
+        this.Text(c, "击杀 " + Convert.ToString(g.kills), 730, 38, 15, 0xFFC8B98C);
+        this.Text(c, "回合 " + Convert.ToString(g.turn), 830, 38, 15, 0xFFC8B98C);
+        this.Text(c, "本层剩余 " + Convert.ToString(g.AliveEnemies()) + " 怪", 940, 38, 15, 0xFFC8B98C);
+    }
+
+    // 底部：消息日志 + 操作提示（或战斗面板）。
+    void DrawBottom(Canvas c, int w, int h, CrawlerGame g) {
+        int y = CrawlerView.LogY;
+        this.Fill(c, 0, y - 8, w, h - y + 8, 0xFF0D0B0A);
+        this.Fill(c, 0, y - 8, w, 1, 0xFF3A322A);
+        int i = 0;
+        for (int k = g.log.Count - 1; k >= 0 && i < 4; k = k - 1) {
+            int col = 0xFF000000 | (0xE8DFC8 - i * 0x30);
+            this.Text(c, g.log[k], 24, y + i * 22, 15, col);
+            i = i + 1;
+        }
+        if (g.state == CrawlerGame.Combat && g.foe != null) {
+            this.DrawCombatBar(c, w, h, g, g.foe);
+            return;
+        }
+        this.Text(c, "方向键 / WASD 移动    空格 攻击    F 喝药    R 逃跑    Esc 设置",
+            24, h - 40, 15, 0xFF8C8272);
+        this.Text(c, "走到楼梯就下潜一层；怪越来越多，也越来越疼。",
+            24, h - 18, 14, 0xFF6E6558);
+        this.DrawBestiary(c, g, h);
+    }
+
+    // 本层怪物情报：三种怪的当前血量与伤害（数值随层数变化）。
+    void DrawBestiary(Canvas c, CrawlerGame g, int h) {
+        int lx = 980;
+        int ly = CrawlerView.LogY + 4;
+        this.Text(c, "本层怪物", lx, ly, 15, 0xFFE8C86A);
+        int[] kinds = new int[] { CrawlerEntities.SlimeKind, CrawlerEntities.SkeletonKind,
+            CrawlerEntities.BatKind };
+        for (int i = 0; i < kinds.Length; i = i + 1) {
+            int k = kinds[i];
+            string line = CrawlerEntities.EnemyName(k) + "  HP "
+                + Convert.ToString(CrawlerEntities.EnemyHp(k, g.depth))
+                + "  伤害 " + Convert.ToString(CrawlerEntities.EnemyDamage(k, g.depth));
+            this.Text(c, line, lx, ly + 24 + i * 20, 14, 0xFFB9A87E);
+        }
+    }
+
+    void DrawCombatBar(Canvas c, int w, int h, CrawlerGame g, CrawlerEnemy foe) {
+        int y = h - 76;
+        this.FillRound(c, 24, y, w - 48, 60, 6, 0xCC2A1512);
+        this.Text(c, "战斗：" + CrawlerEntities.EnemyName(foe.kind), 40, y + 8, 18, 0xFFF0D8B0);
+        this.Bar(c, 160, y + 12, 260, 14, foe.hp, foe.maxHp, 0xFFC0392B);
+        this.Text(c, foe.hp + "/" + Convert.ToString(foe.maxHp)
+            + "   伤害 " + Convert.ToString(foe.dmg), 430, y + 11, 15, 0xFFE8DFC8);
+        this.Text(c, "空格 攻击    F 喝药    R 逃跑    你 HP "
+            + Convert.ToString(g.hp) + "/" + Convert.ToString(g.maxHp),
+            40, y + 34, 15, 0xFFC8B98C);
+    }
+
+    // 游戏中画面：地图 + HUD + 底部面板。
+    void DrawGame(Canvas c, int w, int h, CrawlerGame g) {
+        this.viewX = (w - CrawlerView.ViewW) / 2;
+        if (this.viewX < 0) { this.viewX = 0; }
+        this.DrawMap(c, w, h, g);
+        this.DrawHud(c, w, g);
+        this.DrawBottom(c, w, h, g);
+    }
+
+    // ----- 菜单 -----------------------------------------------------------
+
+    void DrawMenu(Canvas c, int w, int h, int bestDepth, int totalGold,
+                  int totalKills, int clears, int runs) {
+        this.Fill(c, 0, 0, w, h, 0xFF0A0908);
+        // 背景：地砖铺底 + 压暗，菜单不是空背景板。
+        if (this.floorPath != "") {
+            for (int ty = 0; ty < h / 64 + 1; ty = ty + 1) {
+                for (int tx = 0; tx < w / 64 + 1; tx = tx + 1) {
+                    this.Blit(c, this.floorPath, tx * 64, ty * 64, 64, 64,
+                        (tx % 2) * 32, (ty % 2) * 32, 32, 32);
+                }
+            }
+            this.Fill(c, 0, 0, w, h, 0xCC07080A);
+        }
+        this.TextCentered(c, "地底爬行 · CRAWLER", w / 2, 150, 52, 0xFFE8C86A);
+        this.TextCentered(c, "回合制地牢探险 —— 走到底，深到第 5 层就是胜利",
+            w / 2, 216, 18, 0xFFB9A87E);
+        int bx = w / 2 - 200;
+        this.FillRound(c, bx, 268, 400, 132, 8, 0xCC15120E);
+        this.Text(c, "累计战绩", bx + 24, 286, 18, 0xFFE8C86A);
+        this.Text(c, "最深层数    " + Convert.ToString(bestDepth), bx + 24, 314, 16, 0xFFD8CBA8);
+        this.Text(c, "累计金币    " + Convert.ToString(totalGold), bx + 24, 338, 16, 0xFFD8CBA8);
+        this.Text(c, "累计击杀    " + Convert.ToString(totalKills), bx + 214, 314, 16, 0xFFD8CBA8);
+        this.Text(c, "通关次数    " + Convert.ToString(clears), bx + 214, 338, 16, 0xFFD8CBA8);
+        this.Text(c, "开局次数    " + Convert.ToString(runs), bx + 24, 362, 16, 0xFFD8CBA8);
+        this.TextCentered(c, "方向键 / WASD 移动    空格攻击    F 喝药    R 逃跑",
+            w / 2, 430, 16, 0xFF8C8272);
+        this.TextCentered(c, "Esc 打开设置", w / 2, 456, 14, 0xFF6E6558);
+    }
+
+    // ----- 结算 -----------------------------------------------------------
+
+    void DrawResult(Canvas c, CrawlerGame g, int w, int h, int bestDepth,
+                    int totalGold, int totalKills, int clears, int runs) {
+        this.Fill(c, 0, 0, w, h, 0xCC05060A);
+        int bx = w / 2 - 260;
+        int by = 150;
+        this.FillRound(c, bx, by, 520, 420, 10, 0xF01A1610);
+        bool won = g.state == CrawlerGame.Won;
+        this.TextCentered(c, won ? "探险成功" : "你死了", w / 2, by + 26, 40,
+            won ? 0xFF8FE0A0 : 0xFFE06A5A);
+        this.TextCentered(c, "第 " + Convert.ToString(g.depth) + " 层 · 回合 "
+            + Convert.ToString(g.turn) + " · 用时 "
+            + Convert.ToString(g.ElapsedMs() / 1000) + " 秒",
+            w / 2, by + 82, 17, 0xFFD8CBA8);
+        int ly = by + 124;
+        this.Text(c, "本局击杀      " + Convert.ToString(g.kills), bx + 40, ly, 17, 0xFFD8CBA8);
+        this.Text(c, "本局金币      " + Convert.ToString(g.gold), bx + 40, ly + 30, 17, 0xFFD8CBA8);
+        this.Text(c, "累计最深层数  " + Convert.ToString(bestDepth), bx + 40, ly + 60, 17, 0xFFB9A87E);
+        this.Text(c, "累计金币      " + Convert.ToString(totalGold), bx + 40, ly + 90, 17, 0xFFB9A87E);
+        this.Text(c, "累计击杀      " + Convert.ToString(totalKills), bx + 272, ly + 60, 17, 0xFFB9A87E);
+        this.Text(c, "通关次数      " + Convert.ToString(clears), bx + 272, ly + 90, 17, 0xFFB9A87E);
+        this.Text(c, "开局次数      " + Convert.ToString(runs), bx + 272, ly + 120, 17, 0xFFB9A87E);
+    }
+
+    // ----- 按钮 -----------------------------------------------------------
+
+    void DrawButton(Canvas c, string label, int x, int y, int w, int h,
+                    bool primary, bool hover) {
+        int bg = 0xF02A241C;
+        int border = 0xFF6A5A33;
+        if (primary) { bg = 0xF04A3A22; border = 0xFFE8C86A; }
+        if (hover) { bg = 0xF03A3226; }
+        this.FillRound(c, x, y, w, h, 6, bg);
+        this.Fill(c, x, y, w, 2, border);
+        this.Fill(c, x, y + h - 2, w, 2, border);
+        this.Fill(c, x, y, 2, h, border);
+        this.Fill(c, x + w - 2, y, 2, h, border);
+        this.TextCentered(c, label, x + w / 2, y + h / 2 - 11, 18,
+            primary ? 0xFFF2E0B0 : 0xFFD8CBA8);
+    }
+}

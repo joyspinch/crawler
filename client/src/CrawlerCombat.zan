@@ -1,0 +1,77 @@
+using System;
+using System.Collections.Generic;
+
+// 回合制战斗：玩家出手 → 敌人反击（或逃跑）。战斗本身不消耗地图
+// 逻辑之外的任何东西，规则全部落在 CrawlerGame 的状态上——所以
+// 无头用例能直接驱动它。
+public class CrawlerCombat {
+    public const int Ongoing = 0;
+    public const int Victory = 1;
+    public const int Defeat = 2;
+    public const int Escaped = 3;
+    public const int Failed = 4;
+    public const int Idle = 5;
+
+    // 玩家攻击当前对手。返回战斗结果。
+    public static int Attack(CrawlerGame g) {
+        if (g == null) { return CrawlerCombat.Idle; }
+        if (g.state != CrawlerGame.Combat || g.foe == null) { return CrawlerCombat.Idle; }
+        CrawlerEnemy foe = g.foe;
+        int fx = foe.x;
+        int fy = foe.y;
+        string name = CrawlerEntities.EnemyName(foe.kind);
+        int dmg = g.AttackPower();
+        foe.hp = foe.hp - dmg;
+        g.turn = g.turn + 1;
+        g.lastSfx = CrawlerSfxEvent.Hit;
+        if (foe.hp <= 0) {
+            foe.dead = true;
+            foe.hp = 0;
+            g.kills = g.kills + 1;
+            g.lastSfx = CrawlerSfxEvent.Kill;
+            g.SetMessage("干掉了" + name + "！");
+            g.RemoveEnemy(fx, fy);
+            g.foe = null;
+            g.state = CrawlerGame.Explore;
+            g.RollDrop(fx, fy);
+            g.CheckFloorCleared();
+            return CrawlerCombat.Victory;
+        }
+        g.SetMessage("砍中" + name + "（" + Convert.ToString(foe.hp) + "/"
+            + Convert.ToString(foe.maxHp) + "）。");
+        CrawlerCombat.Strike(g, foe);
+        if (g.state == CrawlerGame.Dead) { return CrawlerCombat.Defeat; }
+        return CrawlerCombat.Ongoing;
+    }
+
+    // 敌人反击。
+    public static void Strike(CrawlerGame g, CrawlerEnemy foe) {
+        if (g == null || foe == null) { return; }
+        g.hp = g.hp - foe.dmg;
+        g.lastSfx = CrawlerSfxEvent.Hurt;
+        g.SetMessage(CrawlerEntities.EnemyName(foe.kind) + "反击，生命 -"
+            + Convert.ToString(foe.dmg) + "。");
+        if (g.hp <= 0) { g.PlayerDied(); }
+    }
+
+    // 逃跑：成功率看运气（固定 55%），失败要挨一下。
+    public static int Flee(CrawlerGame g) {
+        if (g == null) { return CrawlerCombat.Idle; }
+        if (g.state != CrawlerGame.Combat || g.foe == null) { return CrawlerCombat.Idle; }
+        CrawlerEnemy foe = g.foe;
+        string name = CrawlerEntities.EnemyName(foe.kind);
+        g.turn = g.turn + 1;
+        bool ok = g.rng.Range(0, 100) < 55;
+        if (ok) {
+            g.state = CrawlerGame.Explore;
+            g.foe = null;
+            g.SetMessage("你甩开了" + name + "。");
+            g.lastSfx = CrawlerSfxEvent.Flee;
+            return CrawlerCombat.Escaped;
+        }
+        g.SetMessage("逃跑失败，" + name + "追了上来！");
+        CrawlerCombat.Strike(g, foe);
+        if (g.state == CrawlerGame.Dead) { return CrawlerCombat.Defeat; }
+        return CrawlerCombat.Failed;
+    }
+}

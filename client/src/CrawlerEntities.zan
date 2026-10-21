@@ -1,0 +1,119 @@
+using System;
+using System.Collections.Generic;
+
+// 音效事件号：玩法层只报"发生了哪件事"，由 CrawlerSfx 决定播哪个
+// 声音。这样规则模块不依赖音频驱动，无头用例也能编译运行。
+public class CrawlerSfxEvent {
+    public const int None = 0;
+    public const int Step = 1;
+    public const int Bump = 2;
+    public const int Hit = 3;
+    public const int Hurt = 4;
+    public const int Kill = 5;
+    public const int Coin = 6;
+    public const int Potion = 7;
+    public const int Descend = 8;
+    public const int Death = 9;
+    public const int Win = 10;
+    public const int Door = 11;
+    public const int Heal = 12;
+    public const int Flee = 13;
+    public const int Pickup = 14;
+}
+
+// 地牢里的敌人。
+public class CrawlerEnemy {
+    public int kind;      // 0 史莱姆 / 1 骷髅 / 2 蝙蝠
+    public int x;
+    public int y;
+    public int hp;
+    public int maxHp;
+    public int dmg;
+    public int speed;     // 每回合移动几步
+    public bool dead;
+    public int wait;      // 冷却：史莱姆隔回合动
+
+    public CrawlerEnemy(int kind, int x, int y, int hp, int maxHp, int dmg, int speed) {
+        this.kind = kind;
+        this.x = x;
+        this.y = y;
+        this.hp = hp;
+        this.maxHp = maxHp;
+        this.dmg = dmg;
+        this.speed = speed;
+        this.dead = false;
+        this.wait = 0;
+    }
+}
+
+// 地上的物品。
+public class CrawlerItem {
+    public int kind;      // 0 金币 / 1 药水 / 2 钥匙
+    public int x;
+    public int y;
+    public bool taken;
+
+    public CrawlerItem(int kind, int x, int y) {
+        this.kind = kind;
+        this.x = x;
+        this.y = y;
+        this.taken = false;
+    }
+}
+
+// 敌人与物品的数值表。层数越深，血量与伤害越高——"越深越强"。
+public class CrawlerEntities {
+    public const int SlimeKind = 0;
+    public const int SkeletonKind = 1;
+    public const int BatKind = 2;
+
+    public const int CoinItem = 0;
+    public const int PotionItem = 1;
+    public const int KeyItem = 2;
+
+    public const int CoinValue = 10;
+    public const int PotionHeal = 25;
+
+    public static string EnemyName(int kind) {
+        if (kind == CrawlerEntities.SkeletonKind) { return "骷髅"; }
+        if (kind == CrawlerEntities.BatKind) { return "蝙蝠"; }
+        return "史莱姆";
+    }
+
+    public static string ItemName(int kind) {
+        if (kind == CrawlerEntities.PotionItem) { return "药水"; }
+        if (kind == CrawlerEntities.KeyItem) { return "钥匙"; }
+        return "金币";
+    }
+
+    public static int BaseHp(int kind) {
+        if (kind == CrawlerEntities.SkeletonKind) { return 16; }
+        if (kind == CrawlerEntities.BatKind) { return 6; }
+        return 8;
+    }
+
+    public static int BaseDamage(int kind) {
+        if (kind == CrawlerEntities.SkeletonKind) { return 7; }
+        if (kind == CrawlerEntities.BatKind) { return 4; }
+        return 3;
+    }
+
+    // 层数加成：每深一层，血 +2、伤害 +1。
+    public static int EnemyHp(int kind, int depth) {
+        return CrawlerEntities.BaseHp(kind) + depth * 2;
+    }
+
+    public static int EnemyDamage(int kind, int depth) {
+        return CrawlerEntities.BaseDamage(kind) + depth;
+    }
+
+    public static int EnemySpeed(int kind) {
+        if (kind == CrawlerEntities.BatKind) { return 2; }
+        return 1;
+    }
+
+    // 本层敌人数量：越深越多。
+    public static int EnemyCount(int depth) {
+        return 3 + depth * 2;
+    }
+}

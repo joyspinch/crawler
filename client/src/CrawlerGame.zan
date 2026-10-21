@@ -1,0 +1,490 @@
+using System;
+using System.Collections.Generic;
+using Game.Kit;
+
+// 地底爬行 · CRAWLER 的玩法核心：一局游戏的全部状态与规则。
+//
+// 闭环：方向键/WASD 走一格 → 撞墙不消耗回合、踩到怪物进战斗 →
+// 战斗里空格攻击 / F 喝药 / R 逃跑 → 打死怪拿掉落 → 捡金币与钥匙 →
+// 踩到楼梯下潜一层（越深怪越多越强）→ 掉到第 5 层算通关，
+// 血掉光算失败 → 结算面板给出层数/击杀/金币/回合/用时，并计入存档。
+//
+// 玩法层不碰画布也不碰音频：画面交给 CrawlerView，声音事件用
+// lastSfx 报出去（由 CrawlerSfx 播），这样无头用例能直接跑规则。
+public class CrawlerGame {
+    public const int ScreenMenu = 0;
+    public const int ScreenPlaying = 1;
+    public const int ScreenResult = 2;
+
+    public const int Explore = 0;
+    public const int Combat = 1;
+    public const int Dead = 2;
+    public const int Won = 3;
+
+    // 通关目标：下潜到第 5 层。
+    public const int GoalDepth = 5;
+
+    public int screen;
+    public int state;
+    public CrawlerMap map;
+    public List<CrawlerEnemy> enemies;
+    public List<CrawlerItem> items;
+    public CrawlerEnemy foe;
+
+    public int px;
+    public int py;
+    public int hp;
+    public int maxHp;
+    public int gold;
+    public int keys;
+    public int potions;
+    public int depth;
+    public int turn;
+    public int kills;
+    public int visionRadius;
+    public int difficulty;
+    public int floorBonus;
+    public bool floorCleared;
+    public int lastSfx;
+    public string message;
+    public List<string> log;
+    public long baseSeed;
+    public long startedMs;
+    public Rng rng;
+
+    public CrawlerGame() {
+        this.enemies = new List<CrawlerEnemy>();
+        this.items = new List<CrawlerItem>();
+        this.log = new List<string>();
+        this.rng = Rng.Seed(20261021L);
+        this.baseSeed = 20261021L;
+        this.visionRadius = 6;
+        this.difficulty = 2;
+        this.maxHp = 60;
+        this.floorBonus = 20;
+        this.screen = CrawlerGame.ScreenMenu;
+        this.state = CrawlerGame.Explore;
+        this.message = "";
+        this.lastSfx = CrawlerSfxEvent.None;
+        this.hp = this.maxHp;
+    }
+
+    // 开一局新的冒险。种子决定整局地图（可复现）。
+    public void NewGame(long seed) {
+        this.baseSeed = seed;
+        this.rng = Rng.Seed(seed);
+        this.depth = 1;
+        this.hp = this.maxHp;
+        this.gold = 0;
+        this.keys = 0;
+        this.potions = 1;
+        this.turn = 0;
+        this.kills = 0;
+        this.state = CrawlerGame.Explore;
+        this.foe = null;
+        this.floorCleared = false;
+        this.screen = CrawlerGame.ScreenPlaying;
+        this.startedMs = DateTime.GetCurrentUnixMilliseconds();
+        this.SetMessage("你钻进地底。找楼梯，往深处走。");
+        this.BuildFloor();
+    }
+
+    // 记一条消息：最近 6 条进日志（画面上滚动显示）。
+    public void SetMessage(string m) {
+        this.message = m;
+        this.log.Add(m);
+        while (this.log.Count > 6) { this.log.RemoveAt(0); }
+    }
+
+    public long ElapsedMs() {
+        return DateTime.GetCurrentUnixMilliseconds() - this.startedMs;
+    }
+
+    // 玩家攻击力：随层数变强，但永远打不过骷髅+史莱姆的组合。
+    public int AttackPower() { return 5 + this.depth * 2; }
+
+    // ----- 楼层构建 -------------------------------------------------------
+
+    // 生成一层：地图 + 敌人 + 物品 + 视野。
+    public void BuildFloor() {
+        this.map = CrawlerMap.Generate(this.baseSeed + (long)this.depth * 7919L);
+        this.enemies.Clear();
+        this.items.Clear();
+        this.px = this.map.startX;
+        this.py = this.map.startY;
+        this.foe = null;
+        this.floorCleared = false;
+        this.map.ClearMemory();
+        this.SpawnEnemies();
+        this.SpawnItems();
+        this.map.UpdateVision(this.px, this.py, this.visionRadius);
+    }
+
+    void SpawnEnemies() {
+        // 凶险档：每高一档多两只怪、伤害 +1。
+        int count = CrawlerEntities.EnemyCount(this.depth) + (this.difficulty - 2) * 2;
+        if (count < 1) { count = 1; }
+        for (int i = 0; i < count; i = i + 1) {
+            int kind = this.rng.Range(0, 3);
+            int x = -1;
+            int y = -1;
+            for (int tries = 0; tries < 240; tries = tries + 1) {
+                int tx = this.rng.Range(1, CrawlerMap.Width - 1);
+                int ty = this.rng.Range(1, CrawlerMap.Height - 1);
+                if (!this.map.IsWalkable(tx, ty)) { continue; }
+                if (this.map.IsStairs(tx, ty)) { continue; }
+                if (this.map.DistanceTo(tx, ty) < 5) { continue; }
+                if (this.EnemyAt(tx, ty) != null) { continue; }
+                if (this.ItemAt(tx, ty) != null) { continue; }
+                x = tx; y = ty;
+                break;
+            }
+            if (x < 0) { continue; }
+            int hp = CrawlerEntities.EnemyHp(kind, this.depth);
+            this.enemies.Add(new CrawlerEnemy(kind, x, y, hp, hp,
+                CrawlerEntities.EnemyDamage(kind, this.depth) + (this.difficulty - 2),
+                CrawlerEntities.EnemySpeed(kind)));
+        }
+    }
+
+    void SpawnItems() {
+        this.SpawnItem(CrawlerEntities.CoinItem, 4 + this.depth);
+        this.SpawnItem(CrawlerEntities.PotionItem, 1 + this.depth / 2);
+        // 钥匙比门还多一把，且只放在"不用钥匙就能走到"的区域——
+        // 否则会出现"钥匙锁在门后面"的死局，这一层就废了。
+        this.SpawnItem(CrawlerEntities.KeyItem, this.map.doorCount + 1, true);
+    }
+
+    void SpawnItem(int kind, int count) {
+        this.SpawnItem(kind, count, false);
+    }
+
+    void SpawnItem(int kind, int count, bool doorFreeOnly) {
+        bool[] open = this.map.DoorFreeSet();
+        for (int i = 0; i < count; i = i + 1) {
+            bool placed = false;
+            for (int tries = 0; tries < 240 && !placed; tries = tries + 1) {
+                int tx = this.rng.Range(1, CrawlerMap.Width - 1);
+                int ty = this.rng.Range(1, CrawlerMap.Height - 1);
+                if (!this.map.IsWalkable(tx, ty)) { continue; }
+                if (this.map.IsStairs(tx, ty)) { continue; }
+                if (this.map.DistanceTo(tx, ty) < 3) { continue; }
+                if (this.EnemyAt(tx, ty) != null) { continue; }
+                if (this.ItemAt(tx, ty) != null) { continue; }
+                if (doorFreeOnly && !open[CrawlerMap.Index(tx, ty)]) { continue; }
+                this.items.Add(new CrawlerItem(kind, tx, ty));
+                placed = true;
+            }
+            if (placed || !doorFreeOnly) { continue; }
+            // 无钥匙区放不下：退而求其次放在任意可走格。
+            for (int tries = 0; tries < 240; tries = tries + 1) {
+                int tx = this.rng.Range(1, CrawlerMap.Width - 1);
+                int ty = this.rng.Range(1, CrawlerMap.Height - 1);
+                if (!this.map.IsWalkable(tx, ty)) { continue; }
+                if (this.map.IsStairs(tx, ty)) { continue; }
+                if (this.EnemyAt(tx, ty) != null) { continue; }
+                if (this.ItemAt(tx, ty) != null) { continue; }
+                this.items.Add(new CrawlerItem(kind, tx, ty));
+                break;
+            }
+        }
+    }
+
+    // ----- 查询 -----------------------------------------------------------
+
+    public CrawlerEnemy EnemyAt(int x, int y) {
+        for (int i = 0; i < this.enemies.Count; i = i + 1) {
+            CrawlerEnemy e = this.enemies[i];
+            if (e.x == x && e.y == y) { return e; }
+        }
+        return null;
+    }
+
+    public CrawlerItem ItemAt(int x, int y) {
+        for (int i = 0; i < this.items.Count; i = i + 1) {
+            CrawlerItem it = this.items[i];
+            if (it.taken) { continue; }
+            if (it.x == x && it.y == y) { return it; }
+        }
+        return null;
+    }
+
+    public int AliveEnemies() {
+        int n = 0;
+        for (int i = 0; i < this.enemies.Count; i = i + 1) {
+            if (!this.enemies[i].dead) { n = n + 1; }
+        }
+        return n;
+    }
+
+    // ----- 移动 -----------------------------------------------------------
+
+    // 走一格。返回 true 表示真的移动了（消耗了一个回合）。
+    public bool Move(int dx, int dy) {
+        if (this.screen != CrawlerGame.ScreenPlaying) { return false; }
+        if (this.state != CrawlerGame.Explore) { return false; }
+        int nx = this.px + dx;
+        int ny = this.py + dy;
+        if (!this.map.InBounds(nx, ny)) {
+            this.SetMessage("前面是岩壁。");
+            this.lastSfx = CrawlerSfxEvent.Bump;
+            return false;
+        }
+        int kind = this.map.At(nx, ny);
+        if (kind == CrawlerMap.Wall) {
+            this.SetMessage("岩壁挡住了去路。");
+            this.lastSfx = CrawlerSfxEvent.Bump;
+            return false;
+        }
+        if (kind == CrawlerMap.Door) {
+            if (this.keys <= 0) {
+                this.SetMessage("铁门锁着，得先找到钥匙。");
+                this.lastSfx = CrawlerSfxEvent.Bump;
+                return false;
+            }
+            this.keys = this.keys - 1;
+            this.map.SetTile(nx, ny, CrawlerMap.Floor);
+            this.turn = this.turn + 1;
+            this.SetMessage("用钥匙撬开了铁门。");
+            this.lastSfx = CrawlerSfxEvent.Door;
+            this.EnemyTurn();
+            return true;
+        }
+        CrawlerEnemy foe = this.EnemyAt(nx, ny);
+        if (foe != null) {
+            this.foe = foe;
+            this.state = CrawlerGame.Combat;
+            this.SetMessage("撞上" + CrawlerEntities.EnemyName(foe.kind)
+                + "！空格攻击，F 喝药，R 逃跑。");
+            this.lastSfx = CrawlerSfxEvent.Hit;
+            return false;
+        }
+        this.px = nx;
+        this.py = ny;
+        this.turn = this.turn + 1;
+        this.lastSfx = CrawlerSfxEvent.Step;
+        this.map.UpdateVision(this.px, this.py, this.visionRadius);
+        this.PickUpAt(this.px, this.py);
+        this.CheckFloorCleared();
+        if (this.map.IsStairs(this.px, this.py)) { this.Descend(); }
+        return true;
+    }
+
+    // 踩到楼梯：下潜一层，地图重生成。
+    public void Descend() {
+        this.depth = this.depth + 1;
+        this.hp = this.hp + 8;
+        if (this.hp > this.maxHp) { this.hp = this.maxHp; }
+        this.SetMessage("顺着楼梯下到第 " + Convert.ToString(this.depth) + " 层。");
+        this.lastSfx = CrawlerSfxEvent.Descend;
+        this.BuildFloor();
+        if (this.depth >= CrawlerGame.GoalDepth) {
+            this.state = CrawlerGame.Won;
+            this.screen = CrawlerGame.ScreenResult;
+            this.SetMessage("抵达第 " + Convert.ToString(this.depth) + " 层，探险成功！");
+            this.lastSfx = CrawlerSfxEvent.Win;
+        }
+    }
+
+    void PickUpAt(int x, int y) {
+        CrawlerItem it = this.ItemAt(x, y);
+        if (it == null) { return; }
+        it.taken = true;
+        if (it.kind == CrawlerEntities.CoinItem) {
+            this.gold = this.gold + CrawlerEntities.CoinValue;
+            this.SetMessage("捡到 " + Convert.ToString(CrawlerEntities.CoinValue) + " 枚金币。");
+            this.lastSfx = CrawlerSfxEvent.Coin;
+            return;
+        }
+        if (it.kind == CrawlerEntities.PotionItem) {
+            this.potions = this.potions + 1;
+            this.SetMessage("捡到一瓶药水。");
+            this.lastSfx = CrawlerSfxEvent.Potion;
+            return;
+        }
+        this.keys = this.keys + 1;
+        this.SetMessage("捡到一把钥匙。");
+        this.lastSfx = CrawlerSfxEvent.Pickup;
+    }
+
+    // 本层敌人清空：额外奖励。
+    public void CheckFloorCleared() {
+        if (this.floorCleared) { return; }
+        if (this.AliveEnemies() > 0) { return; }
+        this.floorCleared = true;
+        this.gold = this.gold + this.floorBonus;
+        this.SetMessage("这一层已被肃清，额外 " + Convert.ToString(this.floorBonus) + " 金币。");
+    }
+
+    // 怪物掉落。
+    public void RollDrop(int x, int y) {
+        int roll = this.rng.Range(0, 100);
+        if (roll < 30) {
+            this.items.Add(new CrawlerItem(CrawlerEntities.CoinItem, x, y));
+            return;
+        }
+        if (roll < 50) {
+            this.items.Add(new CrawlerItem(CrawlerEntities.PotionItem, x, y));
+        }
+    }
+
+    // 移除一只死掉的怪物。
+    public void RemoveEnemy(int x, int y) {
+        for (int i = 0; i < this.enemies.Count; i = i + 1) {
+            CrawlerEnemy e = this.enemies[i];
+            if (e.x == x && e.y == y) {
+                this.enemies.RemoveAt(i);
+                return;
+            }
+        }
+    }
+
+    // ----- 药水 -----------------------------------------------------------
+
+    // 喝药水：回血不超过上限。
+    public bool UsePotion() {
+        if (this.potions <= 0) {
+            this.SetMessage("身上没有药水了。");
+            return false;
+        }
+        this.potions = this.potions - 1;
+        int before = this.hp;
+        this.hp = this.hp + CrawlerEntities.PotionHeal;
+        if (this.hp > this.maxHp) { this.hp = this.maxHp; }
+        this.turn = this.turn + 1;
+        this.lastSfx = CrawlerSfxEvent.Heal;
+        this.SetMessage("喝下药水，回复 " + Convert.ToString(this.hp - before) + " 点生命。");
+        if (this.state == CrawlerGame.Combat) {
+            if (this.foe != null) { CrawlerCombat.Strike(this, this.foe); }
+        } else {
+            this.EnemyTurn();
+        }
+        return true;
+    }
+
+    // ----- 敌人回合 -------------------------------------------------------
+
+    // 所有敌人行动一次。
+    public void EnemyTurn() {
+        if (this.state == CrawlerGame.Dead || this.state == CrawlerGame.Won) { return; }
+        for (int i = 0; i < this.enemies.Count; i = i + 1) {
+            CrawlerEnemy e = this.enemies[i];
+            if (e.dead) { continue; }
+            this.StepEnemy(e);
+            if (this.state == CrawlerGame.Dead) { return; }
+        }
+    }
+
+    void StepEnemy(CrawlerEnemy e) {
+        int dx = this.px - e.x;
+        int dy = this.py - e.y;
+        int adx = dx < 0 ? -dx : dx;
+        int ady = dy < 0 ? -dy : dy;
+        if (adx + ady == 1) {
+            this.hp = this.hp - e.dmg;
+            this.lastSfx = CrawlerSfxEvent.Hurt;
+            this.SetMessage(CrawlerEntities.EnemyName(e.kind) + "啃了你一口，生命 -"
+                + Convert.ToString(e.dmg) + "。");
+            if (this.hp <= 0) { this.PlayerDied(); }
+            return;
+        }
+        if (e.kind == CrawlerEntities.SlimeKind) {
+            e.wait = e.wait + 1;
+            if (e.wait % 2 == 0) { return; }
+        }
+        for (int s = 0; s < e.speed; s = s + 1) {
+            int nx = e.x;
+            int ny = e.y;
+            if (e.kind == CrawlerEntities.BatKind) {
+                // 蝙蝠乱飞：不受地形约束，但也走不出墙。
+                int d = this.rng.Range(0, 4);
+                if (d == 0) { nx = e.x + 1; }
+                else if (d == 1) { nx = e.x - 1; }
+                else if (d == 2) { ny = e.y + 1; }
+                else { ny = e.y - 1; }
+            } else if (this.map.NextStepToward(e.x, e.y, this.px, this.py)) {
+                // 史莱姆与骷髅会绕开墙追过来（寻路，不是撞墙）。
+                nx = e.x + this.map.pathDx;
+                ny = e.y + this.map.pathDy;
+            } else if (adx > ady) {
+                nx = e.x + (dx > 0 ? 1 : -1);
+            } else if (ady > 0) {
+                ny = e.y + (dy > 0 ? 1 : -1);
+            } else {
+                continue;
+            }
+            if (!this.map.IsWalkable(nx, ny)) { continue; }
+            if (this.EnemyAt(nx, ny) != null) { continue; }
+            if (nx == this.px && ny == this.py) { continue; }
+            e.x = nx;
+            e.y = ny;
+        }
+    }
+
+    // 玩家阵亡：进入结算。
+    public void PlayerDied() {
+        this.hp = 0;
+        this.state = CrawlerGame.Dead;
+        this.screen = CrawlerGame.ScreenResult;
+        this.SetMessage("你倒在了第 " + Convert.ToString(this.depth) + " 层。");
+        this.lastSfx = CrawlerSfxEvent.Death;
+    }
+
+    // 自动行走的寻路目标：优先楼梯；楼梯被铁门挡住就先去找钥匙。
+    // 算完把方向写进 map.pathDx / map.pathDy。
+    bool AutoTarget(int tx, int ty) {
+        tx = 0;
+        ty = 0;
+        if (this.map == null) { return false; }
+        // 有钥匙时寻路可以穿门（走到门前用钥匙开）。
+        if (this.map.NextStepTowardEx(this.px, this.py, this.map.stairsX,
+            this.map.stairsY, this.keys > 0)) {
+            tx = this.map.stairsX;
+            ty = this.map.stairsY;
+            return true;
+        }
+        // 去不了：找最近的一把钥匙。
+        int bestDist = -1;
+        int bx = 0;
+        int by = 0;
+        for (int i = 0; i < this.items.Count; i = i + 1) {
+            CrawlerItem it = this.items[i];
+            if (it.taken || it.kind != CrawlerEntities.KeyItem) { continue; }
+            int d = (it.x - this.px) * (it.x - this.px) + (it.y - this.py) * (it.y - this.py);
+            if (bestDist < 0 || d < bestDist) { bestDist = d; bx = it.x; by = it.y; }
+        }
+        if (bestDist >= 0 && this.map.NextStepToward(this.px, this.py, bx, by)) {
+            tx = bx;
+            ty = by;
+            return true;
+        }
+        return false;
+    }
+
+    // 冒烟/演示用的自动行动：随机走、贪心找楼梯、打怪。
+    public void AutoStep() {
+        if (this.state == CrawlerGame.Combat) {
+            int r = this.rng.Range(0, 10);
+            if (r < 7) { CrawlerCombat.Attack(this); }
+            else if (r < 9) { this.UsePotion(); }
+            else { CrawlerCombat.Flee(this); }
+            return;
+        }
+        if (this.state != CrawlerGame.Explore) { return; }
+        if (this.map == null) { return; }
+        // 六成机会朝目标走（寻路），其余乱走捡东西——冒烟/演示要真的
+        // 把下潜链路跑一遍。
+        if (this.rng.Range(0, 10) < 6) {
+            int tx = 0;
+            int ty = 0;
+            if (this.AutoTarget(tx, ty)) {
+                if (this.Move(this.map.pathDx, this.map.pathDy)) { return; }
+            }
+        }
+        int d = this.rng.Range(0, 4);
+        if (d == 0) { this.Move(0, -1); }
+        else if (d == 1) { this.Move(0, 1); }
+        else if (d == 2) { this.Move(-1, 0); }
+        else { this.Move(1, 0); }
+    }
+}

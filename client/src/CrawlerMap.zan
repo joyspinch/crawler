@@ -1,0 +1,375 @@
+using System;
+using System.Collections.Generic;
+using Game.Kit;
+
+// 地牢地图：种子化生成（房间 + 走廊 + 锁门 + 下行楼梯），
+// 外加视野（迷雾）状态的维护与查询。
+//
+// 判据：同一个种子必须生成完全一样的地图，否则"同种子两次生成
+// 结果一致"无从谈起；因此所有随机都走 Rng.Seed(seed)，不碰任何
+// 全局随机源。地图数据用定长数组存（40×24），格子类型：
+//   Floor  地板（可走）
+//   Wall   岩石墙（不可走）
+//   Door   铁门（有钥匙才能开）
+//   Stairs 下行楼梯（踩上去进入下一层）
+public class CrawlerMap {
+    public const int Width = 40;
+    public const int Height = 24;
+
+    public const int Floor = 0;
+    public const int Wall = 1;
+    public const int Door = 2;
+    public const int Stairs = 3;
+
+    public int[] tiles;
+    public bool[] seen;
+    public bool[] visible;
+    public List<int> roomCx;
+    public List<int> roomCy;
+    public List<int> roomW;
+    public List<int> roomH;
+    public int startX;
+    public int startY;
+    public int stairsX;
+    public int stairsY;
+    public int doorCount;
+    public int floorCount;
+    public long seed;
+
+    public CrawlerMap() {
+        this.tiles = new int[CrawlerMap.Width * CrawlerMap.Height];
+        this.seen = new bool[CrawlerMap.Width * CrawlerMap.Height];
+        this.visible = new bool[CrawlerMap.Width * CrawlerMap.Height];
+        this.roomCx = new List<int>();
+        this.roomCy = new List<int>();
+        this.roomW = new List<int>();
+        this.roomH = new List<int>();
+        this.startX = 1;
+        this.startY = 1;
+        this.stairsX = 1;
+        this.stairsY = 1;
+        this.doorCount = 0;
+        this.floorCount = 0;
+        this.seed = 0;
+    }
+
+    public static int Index(int x, int y) { return y * CrawlerMap.Width + x; }
+
+    // 生成一层地牢。rooms 个房间，房间之间用 L 形走廊串起来。
+    public static CrawlerMap Generate(long seed) {
+        CrawlerMap m = new CrawlerMap();
+        m.seed = seed;
+        Rng rng = Rng.Seed(seed);
+        for (int i = 0; i < m.tiles.Length; i = i + 1) { m.tiles[i] = CrawlerMap.Wall; }
+
+        List<int> cxs = new List<int>();
+        List<int> cys = new List<int>();
+        List<int> cws = new List<int>();
+        List<int> chs = new List<int>();
+
+        // --- 房间：随机矩形，互不重叠（留一格间隔）---
+        for (int attempt = 0; attempt < 90; attempt = attempt + 1) {
+            int w = 4 + rng.Range(0, 6);
+            int h = 3 + rng.Range(0, 5);
+            if (w > CrawlerMap.Width - 4 || h > CrawlerMap.Height - 4) { continue; }
+            int x = 1 + rng.Range(0, CrawlerMap.Width - w - 2);
+            int y = 1 + rng.Range(0, CrawlerMap.Height - h - 2);
+            bool overlap = false;
+            for (int i = 0; i < cxs.Count; i = i + 1) {
+                if (x < cxs[i] + cws[i] + 1 && x + w + 1 > cxs[i]
+                    && y < cys[i] + chs[i] + 1 && y + h + 1 > cys[i]) {
+                    overlap = true;
+                }
+            }
+            if (overlap) { continue; }
+            for (int ty = y; ty < y + h; ty = ty + 1) {
+                for (int tx = x; tx < x + w; tx = tx + 1) {
+                    m.tiles[CrawlerMap.Index(tx, ty)] = CrawlerMap.Floor;
+                }
+            }
+            cxs.Add(x);
+            cys.Add(y);
+            cws.Add(w);
+            chs.Add(h);
+        }
+
+        // 兜底：极端情况下也要有一个能站的房间。
+        if (cxs.Count == 0) {
+            for (int ty = 4; ty < 9; ty = ty + 1) {
+                for (int tx = 4; tx < 9; tx = tx + 1) {
+                    m.tiles[CrawlerMap.Index(tx, ty)] = CrawlerMap.Floor;
+                }
+            }
+            cxs.Add(4); cys.Add(4); cws.Add(5); chs.Add(5);
+        }
+
+        // --- 走廊：按房间顺序串成一条链 ---
+        List<int> corridorIdx = new List<int>();
+        for (int i = 1; i < cxs.Count; i = i + 1) {
+            int ax = cxs[i - 1] + cws[i - 1] / 2;
+            int ay = cys[i - 1] + chs[i - 1] / 2;
+            int bx = cxs[i] + cws[i] / 2;
+            int by = cys[i] + chs[i] / 2;
+            int x = ax;
+            while (x != bx) {
+                int idx = CrawlerMap.Index(x, ay);
+                if (m.tiles[idx] == CrawlerMap.Wall) {
+                    m.tiles[idx] = CrawlerMap.Floor;
+                    corridorIdx.Add(idx);
+                }
+                if (x < bx) { x = x + 1; } else { x = x - 1; }
+            }
+            int y = ay;
+            while (y != by) {
+                int idx = CrawlerMap.Index(bx, y);
+                if (m.tiles[idx] == CrawlerMap.Wall) {
+                    m.tiles[idx] = CrawlerMap.Floor;
+                    corridorIdx.Add(idx);
+                }
+                if (y < by) { y = y + 1; } else { y = y - 1; }
+            }
+        }
+
+        // --- 锁门：只生在走廊上，占比不高，保证房间仍然连通 ---
+        for (int i = 0; i < corridorIdx.Count; i = i + 1) {
+            if (rng.Range(0, 100) < 9) {
+                m.tiles[corridorIdx[i]] = CrawlerMap.Door;
+                m.doorCount = m.doorCount + 1;
+            }
+        }
+
+        // --- 起点与楼梯 ---
+        m.startX = cxs[0] + cws[0] / 2;
+        m.startY = cys[0] + chs[0] / 2;
+        int far = -1;
+        int farIdx = 0;
+        for (int i = 0; i < cxs.Count; i = i + 1) {
+            int cx = cxs[i] + cws[i] / 2;
+            int cy = cys[i] + chs[i] / 2;
+            int d = (cx - m.startX) * (cx - m.startX) + (cy - m.startY) * (cy - m.startY);
+            if (d > far) { far = d; farIdx = i; }
+        }
+        m.stairsX = cxs[farIdx] + cws[farIdx] / 2;
+        m.stairsY = cys[farIdx] + chs[farIdx] / 2;
+        m.tiles[CrawlerMap.Index(m.stairsX, m.stairsY)] = CrawlerMap.Stairs;
+
+        for (int i = 0; i < cxs.Count; i = i + 1) {
+            m.roomCx.Add(cxs[i] + cws[i] / 2);
+            m.roomCy.Add(cys[i] + chs[i] / 2);
+            m.roomW.Add(cws[i]);
+            m.roomH.Add(chs[i]);
+        }
+
+        m.floorCount = 0;
+        for (int i = 0; i < m.tiles.Length; i = i + 1) {
+            if (m.tiles[i] != CrawlerMap.Wall) { m.floorCount = m.floorCount + 1; }
+        }
+        return m;
+    }
+
+    // ----- 查询 -----------------------------------------------------------
+
+    public bool InBounds(int x, int y) {
+        return x >= 0 && y >= 0 && x < CrawlerMap.Width && y < CrawlerMap.Height;
+    }
+
+    public int At(int x, int y) {
+        if (!this.InBounds(x, y)) { return CrawlerMap.Wall; }
+        return this.tiles[CrawlerMap.Index(x, y)];
+    }
+
+    public void SetTile(int x, int y, int kind) {
+        if (!this.InBounds(x, y)) { return; }
+        this.tiles[CrawlerMap.Index(x, y)] = kind;
+    }
+
+    public bool IsWall(int x, int y) { return this.At(x, y) == CrawlerMap.Wall; }
+    public bool IsDoor(int x, int y) { return this.At(x, y) == CrawlerMap.Door; }
+    public bool IsStairs(int x, int y) { return this.At(x, y) == CrawlerMap.Stairs; }
+
+    // 地板或楼梯（不含门）：能直接走进去的格子。
+    public bool IsWalkable(int x, int y) {
+        int t = this.At(x, y);
+        return t == CrawlerMap.Floor || t == CrawlerMap.Stairs;
+    }
+
+    public bool IsSeen(int x, int y) {
+        if (!this.InBounds(x, y)) { return false; }
+        return this.seen[CrawlerMap.Index(x, y)];
+    }
+
+    public bool IsVisible(int x, int y) {
+        if (!this.InBounds(x, y)) { return false; }
+        return this.visible[CrawlerMap.Index(x, y)];
+    }
+
+    // ----- 视野 -----------------------------------------------------------
+
+    // 重算当前视野：半径内的格子可见并被记住；可见区四周的墙
+    // 也被记住（否则墙会在地图上开出一个个黑洞）。
+    public void UpdateVision(int px, int py, int radius) {
+        for (int i = 0; i < this.visible.Length; i = i + 1) { this.visible[i] = false; }
+        int r2 = radius * radius;
+        for (int dy = -radius; dy <= radius; dy = dy + 1) {
+            for (int dx = -radius; dx <= radius; dx = dx + 1) {
+                if (dx * dx + dy * dy > r2) { continue; }
+                int nx = px + dx;
+                int ny = py + dy;
+                if (!this.InBounds(nx, ny)) { continue; }
+                this.visible[CrawlerMap.Index(nx, ny)] = true;
+                this.seen[CrawlerMap.Index(nx, ny)] = true;
+            }
+        }
+        int[] ox = new int[] { 1, -1, 0, 0 };
+        int[] oy = new int[] { 0, 0, 1, -1 };
+        for (int dy = -radius; dy <= radius; dy = dy + 1) {
+            for (int dx = -radius; dx <= radius; dx = dx + 1) {
+                if (dx * dx + dy * dy > r2) { continue; }
+                int nx = px + dx;
+                int ny = py + dy;
+                for (int k = 0; k < 4; k = k + 1) {
+                    int wx = nx + ox[k];
+                    int wy = ny + oy[k];
+                    if (!this.InBounds(wx, wy)) { continue; }
+                    this.seen[CrawlerMap.Index(wx, wy)] = true;
+                }
+            }
+        }
+    }
+
+    // 清空"记住"的格子（下潜到新一层时调用）。
+    public void ClearMemory() {
+        for (int i = 0; i < this.seen.Length; i = i + 1) {
+            this.seen[i] = false;
+            this.visible[i] = false;
+        }
+    }
+
+    // ----- 连通性 ---------------------------------------------------------
+
+    // 从起点做 BFS（门视作"有钥匙就能过"），检查每个房间中心是否可达。
+    public bool AllRoomsReachable() {
+        bool[] reach = this.ReachableSet();
+        for (int i = 0; i < this.roomCx.Count; i = i + 1) {
+            int idx = CrawlerMap.Index(this.roomCx[i], this.roomCy[i]);
+            if (!reach[idx]) { return false; }
+        }
+        return true;
+    }
+
+    // 从起点可达的格子集合。
+    public bool[] ReachableSet() {
+        return this.ReachableSetEx(true);
+    }
+
+    // 起点出发、**不穿铁门**就能到达的格子集合。钥匙只放在这里——
+    // 否则会出现"钥匙锁在门后面"的死局（要开门先要有钥匙）。
+    public bool[] DoorFreeSet() {
+        return this.ReachableSetEx(false);
+    }
+
+    public bool[] ReachableSetEx(bool allowDoors) {
+        bool[] reach = new bool[CrawlerMap.Width * CrawlerMap.Height];
+        List<int> queue = new List<int>();
+        int start = CrawlerMap.Index(this.startX, this.startY);
+        reach[start] = true;
+        queue.Add(start);
+        int head = 0;
+        int[] ox = new int[] { 1, -1, 0, 0 };
+        int[] oy = new int[] { 0, 0, 1, -1 };
+        while (head < queue.Count) {
+            int cur = queue[head];
+            head = head + 1;
+            int cx = cur % CrawlerMap.Width;
+            int cy = cur / CrawlerMap.Width;
+            for (int k = 0; k < 4; k = k + 1) {
+                int nx = cx + ox[k];
+                int ny = cy + oy[k];
+                if (!this.InBounds(nx, ny)) { continue; }
+                int idx = CrawlerMap.Index(nx, ny);
+                if (reach[idx]) { continue; }
+                int t = this.tiles[idx];
+                if (t != CrawlerMap.Floor && t != CrawlerMap.Stairs) {
+                    if (!allowDoors || t != CrawlerMap.Door) { continue; }
+                }
+                reach[idx] = true;
+                queue.Add(idx);
+            }
+        }
+        return reach;
+    }
+
+    // 起点到某格子的曼哈顿距离（调试与测试用）。
+    public int DistanceTo(int x, int y) {
+        int dx = x - this.startX;
+        int dy = y - this.startY;
+        if (dx < 0) { dx = -dx; }
+        if (dy < 0) { dy = -dy; }
+        return dx + dy;
+    }
+
+    // ----- 寻路 -----------------------------------------------------------
+
+    // 上一次 NextStepToward 算出来的下一步方向。
+    public int pathDx;
+    public int pathDy;
+
+    // 从 (fx,fy) 朝 (tx,ty) 走的第一步（广度优先最短路）。走不通返回
+    // false。铁门不参与寻路——没钥匙本来也过不去。
+    //
+    // 判据：怪物要能跨房间追到玩家，靠的就是这条路；没有它，怪物会
+    // 永远卡在墙角，威胁变成摆设。
+    public bool NextStepToward(int fx, int fy, int tx, int ty) {
+        return this.NextStepTowardEx(fx, fy, tx, ty, false);
+    }
+
+    // 同上，但允许路径穿过铁门（有钥匙时开一道门再走）。
+    public bool NextStepTowardEx(int fx, int fy, int tx, int ty, bool allowDoors) {
+        this.pathDx = 0;
+        this.pathDy = 0;
+        if (!this.InBounds(fx, fy) || !this.InBounds(tx, ty)) { return false; }
+        if (fx == tx && fy == ty) { return false; }
+        int[] prev = new int[CrawlerMap.Width * CrawlerMap.Height];
+        for (int i = 0; i < prev.Length; i = i + 1) { prev[i] = -1; }
+        bool[] vis = new bool[CrawlerMap.Width * CrawlerMap.Height];
+        List<int> queue = new List<int>();
+        int target = CrawlerMap.Index(tx, ty);
+        vis[target] = true;
+        queue.Add(target);
+        int head = 0;
+        int[] ox = new int[] { 1, -1, 0, 0 };
+        int[] oy = new int[] { 0, 0, 1, -1 };
+        while (head < queue.Count) {
+            int cur = queue[head];
+            head = head + 1;
+            int cx = cur % CrawlerMap.Width;
+            int cy = cur / CrawlerMap.Width;
+            for (int k = 0; k < 4; k = k + 1) {
+                int nx = cx + ox[k];
+                int ny = cy + oy[k];
+                if (!this.InBounds(nx, ny)) { continue; }
+                int idx = CrawlerMap.Index(nx, ny);
+                if (vis[idx]) { continue; }
+                int t = this.tiles[idx];
+                if (t != CrawlerMap.Floor && t != CrawlerMap.Stairs) {
+                    if (!allowDoors || t != CrawlerMap.Door) { continue; }
+                }
+                vis[idx] = true;
+                prev[idx] = cur;
+                queue.Add(idx);
+            }
+        }
+        int start = CrawlerMap.Index(fx, fy);
+        if (!vis[start]) { return false; }
+        // prev[] 指向"离目标更近"的那一格，所以第一步就是从起点走向
+        // prev[起点]。
+        int p = prev[start];
+        if (p < 0) { return false; }
+        int px = p % CrawlerMap.Width;
+        int py = p / CrawlerMap.Width;
+        this.pathDx = px - fx;
+        this.pathDy = py - fy;
+        if (this.pathDx == 0 && this.pathDy == 0) { return false; }
+        return true;
+    }
+}

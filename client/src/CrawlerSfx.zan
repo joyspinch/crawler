@@ -1,0 +1,59 @@
+using System;
+using System.Collections.Generic;
+using Game.Foundation;
+
+// 音效层：把玩法层报的"事件号"翻成具体的 WAV 文件。
+//
+// 用公共包 Game.Foundation.SfxBank：磁盘优先 + 内嵌兜底地加载，
+// 播放带限频（连打不会爆音），没有音频设备时整个库静默失效——
+// 无头 CI 与没声卡的机器上游戏照常跑。
+public class CrawlerSfx {
+    public SfxBank bank;
+    public AudioBus bus;
+    public bool enabled;
+
+    public CrawlerSfx() {
+        this.bus = new AudioBus();
+        this.bank = new SfxBank(this.bus);
+        this.enabled = true;
+        string[] names = new string[] {
+            "step", "bump", "hit", "hurt", "kill", "coin", "potion",
+            "descend", "death", "win", "door", "heal", "flee", "pickup" };
+        this.bank.LoadAll("assets/sfx", names);
+    }
+
+    // 已加载的音效数量（诊断用）。
+    public int Count() { return this.bank.Count(); }
+
+    // 每帧推进限频冷却：不推进的话同一个音效只会响第一次。
+    public void Update(int deltaMilliseconds) {
+        if (this.bus == null) { return; }
+        this.bus.Update(deltaMilliseconds);
+    }
+
+    public void Play(int eventId) {
+        if (!this.enabled || this.bank == null) { return; }
+        string name = CrawlerSfx.NameOf(eventId);
+        if (name == "") { return; }
+        this.bank.Play(name, 1.0, 60);
+    }
+
+    // 事件号 → 音效文件名（不含扩展名）。
+    public static string NameOf(int eventId) {
+        if (eventId == CrawlerSfxEvent.Step) { return "step"; }
+        if (eventId == CrawlerSfxEvent.Bump) { return "bump"; }
+        if (eventId == CrawlerSfxEvent.Hit) { return "hit"; }
+        if (eventId == CrawlerSfxEvent.Hurt) { return "hurt"; }
+        if (eventId == CrawlerSfxEvent.Kill) { return "kill"; }
+        if (eventId == CrawlerSfxEvent.Coin) { return "coin"; }
+        if (eventId == CrawlerSfxEvent.Potion) { return "potion"; }
+        if (eventId == CrawlerSfxEvent.Descend) { return "descend"; }
+        if (eventId == CrawlerSfxEvent.Death) { return "death"; }
+        if (eventId == CrawlerSfxEvent.Win) { return "win"; }
+        if (eventId == CrawlerSfxEvent.Door) { return "door"; }
+        if (eventId == CrawlerSfxEvent.Heal) { return "heal"; }
+        if (eventId == CrawlerSfxEvent.Flee) { return "flee"; }
+        if (eventId == CrawlerSfxEvent.Pickup) { return "pickup"; }
+        return "";
+    }
+}
