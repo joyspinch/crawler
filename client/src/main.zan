@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Gui;
+using Gui.Backend;
 
 // 灰烬地窟 · CRAWLER —— 阶段一：项目骨架 + 回合制地牢场景。
 //
@@ -17,6 +18,7 @@ using Gui;
 public class Program {
     Form form;
     App app;
+    GameShell shell;
     int frames = 0;
     int tick = 0;
 
@@ -40,6 +42,9 @@ public class Program {
     int my = 10;
     int mHp = 40;
 
+    // 当前层数（体力耗尽就下潜一层）
+    int depth = 0;
+
     static void Main() {
         Program p = new Program();
         p.Run();
@@ -51,14 +56,30 @@ public class Program {
         app.UseSkin("dark");
         Canvas.SetBackend(1);
         GenMap();
+        // 外壳：存档（最深层数/最远回合/局数）+ 设置浮层。浮层是标准库控件，
+        // 盖在直绘画面之上——Esc 开关。
+        this.shell = new GameShell();
+        form.Add(this.shell.Overlay().Root());
         app.Show();
         app.RequestRedraw();
         while (true) {
             int got = app.PollOneEvent();
-            if (got < 0) { break; }
+            if (got < 0) { this.Finish(); break; }
+            // Esc 开关设置浮层（只有真有事件时才看键码，否则会拿上一帧的
+            // 残留值反复开关）。
+            if (got == 1 && app.window.EventKind() == 4
+                && app.window.EventKeyCode() == Keys.Escape()) {
+                this.shell.Overlay().Toggle();
+            }
+            this.shell.Overlay().Tick();
             Tick();
             app.BeginFrame();
             Render();
+            // 控件树叠在直绘之上：测量 → 排布 → 绘制。
+            form.MeasureTree(app);
+            form.Arrange(app.ShapeOffX(), app.ContentTop() + app.ShapeOffY(),
+                app.ClientWidth(), app.ClientHeight() - app.ContentTop());
+            form.RenderTree(app);
             app.RenderChrome("灰烬地窟 · CRAWLER");
             frames = frames + 1;
             string capture = Environment.GetEnvironmentVariable("CRAWLER_CAPTURE");
@@ -71,11 +92,21 @@ public class Program {
             if (IsSmoke() && frames >= SmokeFrames()) {
                 Console.WriteLine("CRAWLER_SMOKE_OK frames=" + Convert.ToString(frames)
                     + " turn=" + Convert.ToString(tick));
+                this.Finish();
                 break;
             }
             app.RequestRedraw();
             Window.SleepMs(16);
         }
+    }
+
+    // 收尾：存档落盘 + 打印读回值（测试脚本靠这行验证"跑两遍读得到"）。
+    void Finish() {
+        this.shell.RecordRun(this.depth, this.tick);
+        this.shell.Save();
+        Console.WriteLine("CRAWLER_SAVE best=" + Convert.ToString(this.shell.Best())
+            + " turns=" + Convert.ToString(this.shell.Turns())
+            + " runs=" + Convert.ToString(this.shell.Runs()));
     }
 
     bool IsSmoke() {
@@ -116,7 +147,18 @@ public class Program {
         else { py = py + 1; if (py > 12) { py = 6; } }
         if (px < 6) { px = 6; }
         if (py < 6) { py = 6; }
-        // 视野
+        // 体力消耗档（1/2/3）决定每回合掉多少体力——设置不是摆设。
+        pStam = pStam - this.shell.StaminaCost();
+        if (pStam <= 0) {
+            // 体力耗尽：下潜一层，补满体力，重开这一层。
+            depth = depth + 1;
+            pStam = 100;
+            GenMap();
+            for (int i = 0; i < seen.Length; i = i + 1) { seen[i] = false; }
+            px = 20; py = 14; mx = 28; my = 10; mHp = 40;
+        }
+        // 视野：视野半径档（4/8/12 格）决定照多远。
+        pLight = this.shell.LightRadius();
         for (int dy = -pLight; dy <= pLight; dy = dy + 1) {
             for (int dx = -pLight; dx <= pLight; dx = dx + 1) {
                 int nx = px + dx; int ny = py + dy;
@@ -125,17 +167,29 @@ public class Program {
                 seen[ny * MapW + nx] = true;
             }
         }
-        // 怪物朝玩家靠一步
-        int mdx = px - mx;
-        int mdy = py - my;
-        if (mdx != 0 || mdy != 0) {
+        // 怪物朝玩家靠：凶险档决定每回合追几步。
+        int steps = this.shell.Difficulty();
+        for (int s = 0; s < steps; s = s + 1) {
+            int mdx = px - mx;
+            int mdy = py - my;
+            if (mdx == 0 && mdy == 0) { break; }
             int nx = mx + (mdx > 0 ? 1 : (mdx < 0 ? -1 : 0));
             int ny = my + (mdy > 0 ? 1 : (mdy < 0 ? -1 : 0));
+            if (nx < 0 || ny < 0 || nx >= MapW || ny >= MapH) { break; }
             if (map[ny * MapW + nx] == 0) { mx = nx; my = ny; }
         }
         int dist = (px - mx) * (px - mx) + (py - my) * (py - my);
-        if (dist < 4) { pHp = pHp - 3; mHp = mHp - 5; }
-        if (pHp <= 0) { pHp = 100; mHp = 40; px = 20; py = 14; mx = 28; my = 10; }
+        // 接触伤害随凶险档升高。
+        if (dist < 4) { pHp = pHp - (1 + this.shell.Difficulty()); mHp = mHp - 5; }
+        if (pHp <= 0) {
+            // 死了：这一局到此为止，记下最深层数后重开一局。
+            this.shell.RecordRun(this.depth, this.tick);
+            depth = 0;
+            pHp = 100; pStam = 100;
+            px = 20; py = 14; mx = 28; my = 10; mHp = 40;
+            GenMap();
+            for (int i = 0; i < seen.Length; i = i + 1) { seen[i] = false; }
+        }
     }
 
     void Render() {
@@ -173,8 +227,10 @@ public class Program {
         c.FillRect(24, 70, 240, 10, 0xFF241E1A);
         c.FillRect(24, 70, 240 * pStam / 100, 10, 0xFF7E7A46);
         c.DrawText(274, 68, "STA " + Convert.ToString(pStam), 0xFFE8DFC8, 14);
+        c.DrawText(24, h - 76, "Esc 打开设置", 0xC09C937E, 14);
         c.DrawText(24, h - 52, "回合 " + Convert.ToString(tick) + "  位置 " + Convert.ToString(px)
-            + "," + Convert.ToString(py) + "  怪物HP " + Convert.ToString(mHp), 0xFF9C937E, 14);
+            + "," + Convert.ToString(py) + "  怪物HP " + Convert.ToString(mHp)
+            + "  第 " + Convert.ToString(depth) + " 层", 0xFF9C937E, 14);
         c.DrawText(24, h - 28, "TODO 素材：32x32 瓦片集（地面6/墙6/物件8/熔渣/水）+ 怪物10种x4帧 + 物品图标30 + 字体",
             0xB09C937E, 14);
     }

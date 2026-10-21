@@ -1,0 +1,98 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Json;
+using Game.Foundation;
+using Game.Foundation.Gui;
+
+// 灰烬地窟 · CRAWLER 的外壳：存档（最深层数 + 最远回合 + 局数）+ 设置
+// （怪物凶险 / 视野半径 / 体力消耗）+ 设置浮层。
+//
+// 存档基座（原子写 + 备份回退 + 版本号）与设置逻辑层（档位计算 + 校验 +
+// 落盘）都在公共包 Game.Foundation 里；这里只留"这个游戏存什么、设置有哪
+// 几项"——换个游戏换的正是这两行。
+public class GameShell {
+    GameSaveStore store;
+    GameSettings settings;
+    SettingsModel model;
+    SettingsOverlay overlay;
+    int bestDepth;
+    int bestTurns;
+    int runs;
+
+    public GameShell() {
+        string dir = GameShell.SaveDir();
+        Directory.CreateDirectory(dir);
+        this.store = new GameSaveStore(dir, "crawler", 1);
+        this.settings = new GameSettings().At(dir + "/settings.json");
+        // 怪物凶险：怪每回合追几步、接触伤害多高。
+        this.settings.AddIntChoice("difficulty", "怪物凶险", 2, new List<int> { 1, 2, 3 });
+        // 视野半径：玩家能看见多远（照亮的地牢范围）。
+        this.settings.AddIntChoice("light", "视野半径", 8, new List<int> { 4, 8, 12 });
+        // 体力消耗：每回合掉多少体力，体力耗尽就下潜一层。
+        this.settings.AddIntChoice("stamina", "体力消耗", 2, new List<int> { 1, 2, 3 });
+        this.settings.Load();
+        this.model = new SettingsModel(this.settings);
+        this.overlay = new SettingsOverlay(this.model);
+        this.overlay.SetTitle("设置");
+        this.Load();
+    }
+
+    // 存档目录：%LOCALAPPDATA%/Crawler（可用 CRAWLER_SAVE 环境变量覆盖，
+    // 测试脚本靠它把存档落在临时目录里，不污染玩家机器）。
+    static string SaveDir() {
+        string overridden = Environment.GetEnvironmentVariable("CRAWLER_SAVE");
+        if (overridden != "") { return overridden; }
+        string basePath = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        if (basePath == "") { basePath = Directory.GetCurrentDirectory(); }
+        return basePath + "/Crawler";
+    }
+
+    public SettingsOverlay Overlay() { return this.overlay; }
+    public int Best() { return this.bestDepth; }
+    public int Turns() { return this.bestTurns; }
+    public int Runs() { return this.runs; }
+
+    // 怪物凶险档（1 温吞 / 2 寻常 / 3 凶残）——游戏逻辑读它算追击与伤害。
+    public int Difficulty() {
+        if (this.settings == null) { return 2; }
+        return this.settings.GetInt("difficulty");
+    }
+
+    // 视野半径档（4/8/12 格）。
+    public int LightRadius() {
+        if (this.settings == null) { return 8; }
+        return this.settings.GetInt("light");
+    }
+
+    // 每回合体力消耗档（1/2/3 点）。
+    public int StaminaCost() {
+        if (this.settings == null) { return 2; }
+        return this.settings.GetInt("stamina");
+    }
+
+    // 读档：没有存档就用默认值，不报错。
+    public void Load() {
+        JsonValue data = this.store.Load(0);
+        if (data == null) { this.bestDepth = 0; this.bestTurns = 0; this.runs = 0; return; }
+        this.bestDepth = data.Int("bestDepth", 0);
+        this.bestTurns = data.Int("bestTurns", 0);
+        this.runs = data.Int("runs", 0);
+    }
+
+    // 存档：最深层数与最远回合只增不减，局数 +1。
+    public void Save() {
+        JsonValue data = JsonValue.NewObject();
+        data.PutInt("bestDepth", this.bestDepth);
+        data.PutInt("bestTurns", this.bestTurns);
+        data.PutInt("runs", this.runs + 1);
+        this.runs = this.runs + 1;
+        this.store.Save(0, data);
+    }
+
+    // 一局结束：记下最深层数与撑过的回合数（不落盘，退出时统一存）。
+    public void RecordRun(int depth, int turns) {
+        if (depth > this.bestDepth) { this.bestDepth = depth; }
+        if (turns > this.bestTurns) { this.bestTurns = turns; }
+    }
+}
