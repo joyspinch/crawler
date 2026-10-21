@@ -1,0 +1,53 @@
+using System;
+
+// 朝向 → 取帧索引（纯函数，不碰画布）。
+//
+// 为什么必须离线烘焙：引擎运行时转不了图——`Canvas.BlitImage` 只有源矩形
+// (sx,sy,sw,sh)，没有旋转也没有水平翻转；`Gui.SpriteBatch` 的每精灵同样只有
+// dx,dy,dw,dh,sx,sy,sw,sh,tint。所以"把角色转个方向"只能在素材阶段做
+// （见 client/tools/bake_facing.py）。
+//
+// 本项目是俯视格子地牢，只有左右两个朝向，因此每个主体一张**两帧精灵表**：
+//   帧索引 0 = 原图（朝右）
+//   帧索引 1 = 水平镜像（朝左）
+//   源矩形   = (索引 * 帧宽, 0, 帧宽, 帧高)   ← 源图像素，不是显示像素
+//
+// 帧宽/帧高是**入库图的像素**（显示尺寸的 2 倍），与 bake_facing.py 生成的
+// 精灵表一一对应；改那边必须同步改这里（client/ASSETS.md 有同一份口径，
+// 断言用例按这里钉住）。
+//
+// 朝向可读性：原图是正面视角，光靠镜像看不出朝向，所以 bake_facing.py 给
+// 史莱姆烘了一只偏右的眼睛、给蝙蝠烘了一只偏右的独眼；玩家与骷髅的
+// 道具本身就不对称（提灯/长剑、剑/盾），镜像即明显。玩家的提灯还会在
+// 朝向一侧投出暖光（CrawlerView 的"灯池"），方向一眼可辨。
+public class CrawlerFacing {
+    public const int FrameRight = 0;
+    public const int FrameLeft = 1;
+    public const int Frames = 2;
+
+    // 精灵表尺寸：每帧 64×64（运行时显示 32×32）。
+    public const int PlayerFrameW = 64;
+    public const int PlayerFrameH = 64;
+    public const int EnemyFrameW = 64;
+    public const int EnemyFrameH = 64;
+
+    // 玩家取帧索引。
+    public static int PlayerFrame(bool facingRight) {
+        return facingRight ? CrawlerFacing.FrameRight : CrawlerFacing.FrameLeft;
+    }
+
+    // 怪物取帧索引（面朝移动方向）。
+    public static int EnemyFrame(bool facingRight) {
+        return facingRight ? CrawlerFacing.FrameRight : CrawlerFacing.FrameLeft;
+    }
+
+    // 玩家帧的源矩形左边界（源图像素）。
+    public static int PlayerSrcX(bool facingRight) {
+        return CrawlerFacing.PlayerFrame(facingRight) * CrawlerFacing.PlayerFrameW;
+    }
+
+    // 怪物帧的源矩形左边界（源图像素）。
+    public static int EnemySrcX(bool facingRight) {
+        return CrawlerFacing.EnemyFrame(facingRight) * CrawlerFacing.EnemyFrameW;
+    }
+}

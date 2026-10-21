@@ -1,0 +1,13 @@
+# UiDriver 脚本：截「角色朝左」的画面。
+#
+# 用法见 client/tools/shot_dungeon.script（同一套约定）。
+# 流程：空格开局 → 按住 A 往左走一小段 → 松手（松手后朝向保持向左）。
+# 键码：32=空格，65=A（左）。
+wait 400
+keydown 32
+keyup 32
+wait 700
+keydown 65
+wait 500
+keyup 65
+wait 900

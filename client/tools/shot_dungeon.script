@@ -1,0 +1,13 @@
+# UiDriver 脚本：截「地牢画面」一帧（开局后不动）。
+#
+# 用法（见 client/tools/shot_face_right.script，同一套约定）：
+#   $env:ZAN_UI_OUT = "build/crawler/uidrv"
+#   $env:ZAN_UI_SCRIPT = 'client/tools/shot_dungeon.script'
+#   python D:/project/zan-lang/scripts/shot_window.py `
+#     "build/crawler/Crawler.exe" "build/crawler/ui_dungeon.png" 3.5 "build/crawler"
+#
+# 空格（32）在主菜单上开局。
+wait 400
+keydown 32
+keyup 32
+wait 1500

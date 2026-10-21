@@ -50,6 +50,7 @@ public class CrawlerApp : IGuiHostLoop {
     public string capturePath;
     public int captureFrame;
     public List<CrButton> buttons;
+    public bool mouseDown;
 
     public CrawlerApp() {
         this.buttons = new List<CrButton>();
@@ -77,6 +78,13 @@ public class CrawlerApp : IGuiHostLoop {
 
     public void Start(GuiHost h) {
         this.host = h;
+        // 皮肤包（地牢风：苔绿/石板/锈金/火把橙）：必须在默认皮肤之后
+        // 应用，否则会被默认皮肤盖回去。皮肤目录与 exe 同级：
+        // build/crawler/skins/crawler/skin.css（构建脚本拷过去）。
+        if (h.App() != null) {
+            h.App().UseSkin("dark");
+            h.App().UseSkin("crawler");
+        }
         // 设置浮层挂到 HUD 层（标准库控件，盖在画面之上）。
         h.Hud().Add(this.shell.Overlay().Root());
         this.game.visionRadius = this.shell.LightRadius();
@@ -94,7 +102,12 @@ public class CrawlerApp : IGuiHostLoop {
             if (keycode >= 0 && keycode < 256) { this.held[keycode] = false; }
             return;
         }
-        if (kind == 3 && keycode == 0) { this.OnClick(h.MouseX(), h.MouseY()); }
+        if (kind == 2) { this.mouseDown = true; return; }
+        if (kind == 3) {
+            this.mouseDown = false;
+            if (keycode == 0) { this.OnClick(h.MouseX(), h.MouseY()); }
+            return;
+        }
     }
 
     public void FixedUpdate(GuiHost h, int deltaMilliseconds) { }
@@ -161,7 +174,8 @@ public class CrawlerApp : IGuiHostLoop {
             bool hover = this.host != null
                 && this.host.MouseX() >= b.x && this.host.MouseX() < b.x + b.w
                 && this.host.MouseY() >= b.y && this.host.MouseY() < b.y + b.h;
-            this.view.DrawButton(c, b.label, b.x, b.y, b.w, b.h, b.kind == 1, hover);
+            this.view.DrawButton(c, b.label, b.x, b.y, b.w, b.h, b.kind == 1,
+                hover, hover && this.mouseDown);
         }
         if (this.capturePath != "" && this.frames == this.captureFrame) {
             c.WritePixels(this.capturePath, 0, 0, c.Width(), c.Height());

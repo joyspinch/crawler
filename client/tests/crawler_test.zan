@@ -40,6 +40,7 @@ public class CrawlerTest {
         TestDoors();
         TestFloors();
         TestDeathAndWin();
+        TestFacing();
         TestFullRuns();
         if (failures > 0) {
             Console.WriteLine("crawler_test FAILED checks=" + Convert.ToString(checks)
@@ -440,6 +441,90 @@ public class CrawlerTest {
         Eq(w.depth, 5, "到达第 5 层");
         Eq(w.state, CrawlerGame.Won, "第 5 层算通关");
         Eq(w.screen, CrawlerGame.ScreenResult, "通关进结算面板");
+    }
+
+    // ----- 朝向 -----------------------------------------------------------
+
+    // 找一格"左右都是地板"的格子（能左右各走一步），返回下标。
+    static int FindLeftRightPair(CrawlerMap m) {
+        for (int yy = 1; yy < CrawlerMap.Height - 1; yy = yy + 1) {
+            for (int xx = 1; xx < CrawlerMap.Width - 2; xx = xx + 1) {
+                if (m.At(xx, yy) != CrawlerMap.Floor) { continue; }
+                if (m.At(xx - 1, yy) != CrawlerMap.Floor) { continue; }
+                if (m.At(xx + 1, yy) != CrawlerMap.Floor) { continue; }
+                return CrawlerMap.Index(xx, yy);
+            }
+        }
+        return -1;
+    }
+
+    // 朝向：逻辑朝向 → 取帧索引的映射钉死（不回归）。
+    static void TestFacing() {
+        // 取帧映射是纯函数，左右两帧的索引与源矩形都必须不同。
+        Eq(CrawlerFacing.PlayerFrame(true), CrawlerFacing.FrameRight, "玩家朝右取帧 0");
+        Eq(CrawlerFacing.PlayerFrame(false), CrawlerFacing.FrameLeft, "玩家朝左取帧 1");
+        Ok(CrawlerFacing.PlayerFrame(true) != CrawlerFacing.PlayerFrame(false),
+            "玩家左右两帧索引不同");
+        Ok(CrawlerFacing.PlayerSrcX(true) != CrawlerFacing.PlayerSrcX(false),
+            "玩家左右两帧源矩形不同");
+        Eq(CrawlerFacing.EnemyFrame(true), CrawlerFacing.FrameRight, "怪物朝右取帧 0");
+        Eq(CrawlerFacing.EnemyFrame(false), CrawlerFacing.FrameLeft, "怪物朝左取帧 1");
+        Ok(CrawlerFacing.EnemyFrame(true) != CrawlerFacing.EnemyFrame(false),
+            "怪物左右两帧索引不同");
+        // 源矩形落在精灵表内：帧宽 × 帧数 = 精灵表宽。
+        Eq(CrawlerFacing.PlayerSrcX(false), CrawlerFacing.PlayerFrameW,
+            "第二帧的源 X 就是帧宽");
+        Eq(CrawlerFacing.PlayerFrameW * CrawlerFacing.Frames, 128, "玩家精灵表宽 128");
+        Eq(CrawlerFacing.EnemyFrameW * CrawlerFacing.Frames, 128, "怪物精灵表宽 128");
+
+        // 往左走一步 → 朝向变朝左、取帧索引变化；往右走回来 → 索引复原。
+        CrawlerGame g = NewGame(7L);
+        g.enemies.Clear();
+        int idx = FindLeftRightPair(g.map);
+        Ok(idx >= 0, "找得到能左右各走一步的格子");
+        if (idx >= 0) {
+            int px = idx % CrawlerMap.Width;
+            int py = idx / CrawlerMap.Width;
+            g.px = px;
+            g.py = py;
+            g.facingRight = true;
+            int frameRight = CrawlerFacing.PlayerFrame(g.facingRight);
+            Ok(g.Move(-1, 0), "往左走一步成功");
+            Ok(!g.facingRight, "往左走后朝向朝左");
+            int frameLeft = CrawlerFacing.PlayerFrame(g.facingRight);
+            Ok(frameLeft != frameRight, "往左走后取帧索引变了");
+            Ok(g.Move(1, 0), "往右走一步成功");
+            Ok(g.facingRight, "往右走后朝向朝右");
+            Eq(CrawlerFacing.PlayerFrame(g.facingRight), frameRight,
+                "往右走后取帧索引回来了");
+            // 上下走不改变朝向。
+            g.facingRight = true;
+            g.Move(0, -1);
+            Ok(g.facingRight, "上下移动不改变朝向");
+        }
+
+        // 怪物：贴身时面朝玩家。
+        CrawlerGame e = NewGame(7L);
+        e.enemies.Clear();
+        int eidx = FindLeftRightPair(e.map);
+        Ok(eidx >= 0, "找得到能放怪物的格子");
+        if (eidx >= 0) {
+            int ex = eidx % CrawlerMap.Width;
+            int ey = eidx / CrawlerMap.Width;
+            e.px = ex;
+            e.py = ey;
+            CrawlerEnemy left = new CrawlerEnemy(CrawlerEntities.SkeletonKind,
+                ex - 1, ey, 10, 10, 1, 1);
+            e.enemies.Add(left);
+            e.EnemyTurn();
+            Ok(left.facingRight, "怪在玩家左边时面朝右");
+            CrawlerEnemy right = new CrawlerEnemy(CrawlerEntities.SkeletonKind,
+                ex + 1, ey, 10, 10, 1, 1);
+            e.enemies.Add(right);
+            e.hp = e.maxHp;
+            e.EnemyTurn();
+            Ok(!right.facingRight, "怪在玩家右边时面朝左");
+        }
     }
 
     // ----- 完整流程（三个种子） -------------------------------------------

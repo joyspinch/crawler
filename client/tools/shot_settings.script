@@ -1,0 +1,11 @@
+# UiDriver 脚本：截「设置浮层」的画面（Esc 打开）。
+#
+# 用法见 client/tools/shot_dungeon.script（同一套约定）。
+# 键码：32=空格（开局），27=Esc。
+wait 400
+keydown 32
+keyup 32
+wait 900
+keydown 27
+keyup 27
+wait 1200

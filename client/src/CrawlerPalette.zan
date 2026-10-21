@@ -1,0 +1,68 @@
+// 地底爬行 · CRAWLER 的色板：全项目只此一份颜色定义。
+//
+// 判据：同一个语义只允许在这里挑一次颜色——底色/前景/强调/危险/成功/
+// 面板底/描边各一个值，渲染层与 HUD 层都从这里取，不允许三个文件各挑
+// 一个"差不多的褐"。
+//
+// 地牢配色：苔绿（生物）· 石板灰（岩体）· 锈金（金属/描边）· 火把橙
+//（光源/强调）。颜色是 0xAARRGGBB（与 Gui 主题色同一种打包方式）。
+//
+// 皮肤包（client/assets/skins/crawler/skin.css）里的同名色值必须与这里
+// 一致：画布上的 UI 与标准库控件（设置浮层）是两套渲染路径，靠同一份
+// 色值保持观感统一。
+public class CrawlerPalette {
+    // ---- 底色与岩体 ----
+    public const int Void = 0xFF05060A;        // 视野外 / 地图底
+    public const int StoneDark = 0xFF1E1B18;   // 墙体兜底色
+    public const int StoneFloor = 0xFF2A2724;  // 地板兜底色
+    public const int DoorWood = 0xFF6B4A2A;    // 铁门兜底色
+    public const int StairHole = 0xFF101820;   // 楼梯兜底色
+
+    // ---- 面板与底板 ----
+    public const int PanelBg = 0xE6241E18;     // 结算面板
+    public const int PanelBgSoft = 0xD01C1815; // HUD 面板
+    public const int BarBg = 0xFF171310;       // 血条底槽
+    public const int CombatBg = 0xE02A1512;    // 战斗条
+
+    // ---- 文字 ----
+    public const int Parchment = 0xFFE8DFC8;   // 主文字（骨白）
+    public const int SlateText = 0xFFB9A87E;   // 次文字（石板褐）
+    public const int Mist = 0xFF8C8272;        // 弱文字（提示）
+    public const int TextInk = 0xFF1A120C;     // 火把橙底上的深色字
+    public const int TextShadow = 0xC0000000;  // 文字描边/阴影
+
+    // ---- 强调 ----
+    public const int RustGold = 0xFFC8A15A;    // 锈金：标题 / 描边
+    public const int Brass = 0xFF966E3A;       // 铜边
+    public const int Torch = 0xFFE8913E;       // 火把橙：主强调
+    public const int TorchBright = 0xFFFFC46B; // 火把橙高光
+    public const int Moss = 0xFF7FA05A;        // 苔绿
+    public const int MossDeep = 0xFF4E6B38;    // 深苔绿
+
+    // ---- 语义色 ----
+    public const int Hp = 0xFFC0392B;          // 生命
+    public const int HpSoft = 0xFFE06A5A;      // 生命高光
+    public const int EnemyHp = 0xFFB03A3A;     // 怪物血条
+    public const int Danger = 0xFFE05A4A;      // 危险 / 死亡
+    public const int Success = 0xFF8FCB86;     // 成功 / 通关
+    public const int Gold = 0xFFE0C060;        // 金币
+    public const int KeyGold = 0xFFD9C46A;     // 钥匙
+    public const int Potion = 0xFFD08A8A;      // 药水
+
+    // ---- 迷雾与光 ----
+    public const int Fog = 0xD0060709;         // 迷雾色（半透明黑蓝）
+    public const int Shadow = 0x66000000;      // 落地投影
+    public const int LightWarm = 0xFFFFC478;   // 提灯暖光
+
+    // ---- 遮罩 ----
+    public const int MenuMask = 0xE007080A;    // 主菜单压暗
+    public const int ResultMask = 0xD005060A;  // 结算压暗
+
+    // ---- 兜底色（美术底板缺失时）----
+    public const int ButtonFace = 0xF03A322A;
+    public const int ButtonFaceHover = 0xF04E4234;
+    public const int ButtonPrimary = 0xF0B4681F;
+    public const int ButtonEdge = 0xFF966E3A;
+    public const int PlayerFallback = 0xFFD8CFA0;
+    public const int EnemyFallback = 0xFFB03A3A;
+}

@@ -45,6 +45,8 @@ public class CrawlerGame {
     public int difficulty;
     public int floorBonus;
     public bool floorCleared;
+    // 朝向：最后移动的方向（渲染按它取精灵表的左右两帧）。
+    public bool facingRight;
     public int lastSfx;
     public string message;
     public List<string> log;
@@ -67,6 +69,7 @@ public class CrawlerGame {
         this.message = "";
         this.lastSfx = CrawlerSfxEvent.None;
         this.hp = this.maxHp;
+        this.facingRight = true;
     }
 
     // 开一局新的冒险。种子决定整局地图（可复现）。
@@ -263,6 +266,9 @@ public class CrawlerGame {
         this.py = ny;
         this.turn = this.turn + 1;
         this.lastSfx = CrawlerSfxEvent.Step;
+        // 朝向：记住最后移动的方向（左右移动才改；上下走保持原朝向）。
+        if (dx > 0) { this.facingRight = true; }
+        else if (dx < 0) { this.facingRight = false; }
         this.map.UpdateVision(this.px, this.py, this.visionRadius);
         this.PickUpAt(this.px, this.py);
         this.CheckFloorCleared();
@@ -381,6 +387,8 @@ public class CrawlerGame {
         int adx = dx < 0 ? -dx : dx;
         int ady = dy < 0 ? -dy : dy;
         if (adx + ady == 1) {
+            // 贴身：面朝玩家（左右位置决定朝向）。
+            if (dx != 0) { e.facingRight = dx > 0; }
             this.hp = this.hp - e.dmg;
             this.lastSfx = CrawlerSfxEvent.Hurt;
             this.SetMessage(CrawlerEntities.EnemyName(e.kind) + "啃了你一口，生命 -"
@@ -416,6 +424,8 @@ public class CrawlerGame {
             if (!this.map.IsWalkable(nx, ny)) { continue; }
             if (this.EnemyAt(nx, ny) != null) { continue; }
             if (nx == this.px && ny == this.py) { continue; }
+            // 朝向：跟着移动方向转（只有左右移动才改）。
+            if (nx != e.x) { e.facingRight = nx > e.x; }
             e.x = nx;
             e.y = ny;
         }

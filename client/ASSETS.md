@@ -1,42 +1,120 @@
 # crawler · 地底爬行 · 素材清单
 
-回合制 Roguelike 地牢探索。素材全部自制：位图用 gpt-image-2.5 生成原图后
-由脚本抠 alpha / 裁边 / 缩放入库；音效用 Python 合成。
+回合制 Roguelike 地牢探索。角色/怪物/物品的位图用 gpt-image-2.5 生成原图后
+由脚本抠 alpha / 裁边 / 缩放入库；**地砖 / 墙 / UI 底板 / 点缀物 / 阴影 / 光晕
+全部程序化生成**（大面积底板交给 AI 只会得到高频噪点，程序化可控）；
+音效用 Python 合成。
 
-**总量**：位图 11 张（74.5 KB）+ 音效 14 个（190.8 KB）= **265.3 KB**
+## 一、朝向精灵表（左右两帧）
 
-## 一、位图（`client/assets/`）
+引擎运行时转不了图——`Canvas.BlitImage` 只有源矩形 `(sx,sy,sw,sh)`，没有旋转、
+没有水平翻转；`Gui.SpriteBatch` 的每精灵也只有 `dx,dy,dw,dh,sx,sy,sw,sh,tint`。
+所以方向只能**离线预烘焙**：`client/tools/bake_facing.py` 把每个主体烘成一张
+**两帧精灵表**。
 
-全部 **64×64 PNG**（显示尺寸 32×32 的 2 倍），主体类带 alpha 通道。
-渲染时地砖/墙切 4 块取景变化，其余整幅缩放。
+| 帧索引 | 含义 | 来源 |
+|---|---|---|
+| 0 | 朝右 | 原图（提灯 / 眼睛在身体右侧） |
+| 1 | 朝左 | 原图水平镜像（预乘 alpha → 镜像 → 反预乘，不带黑边） |
 
-| 文件 | 尺寸 | 类别 | 用途 | 生成方式 |
-|---|---|---|---|---|
-| `floor.png` | 64×64 | 底板（不透明） | 地砖；切 4 象限取景避免重复感 | gpt-image-2.5 无缝石板地砖 |
-| `wall.png` | 64×64 | 底板（不透明） | 岩壁；切 4 象限取景 | gpt-image-2.5 石砌墙体顶面 |
-| `player.png` | 64×64 | 主体（alpha） | 玩家（披风探险者，持短剑与提灯） | gpt-image-2.5 俯视单角色 |
-| `slime.png` | 64×64 | 主体（alpha） | 史莱姆（半透明绿胶） | gpt-image-2.5 俯视单角色 |
-| `skeleton.png` | 64×64 | 主体（alpha） | 骷髅战士（骨甲 + 锈剑 + 小盾） | gpt-image-2.5 俯视单角色 |
-| `bat.png` | 64×64 | 主体（alpha） | 蝙蝠（展翅） | gpt-image-2.5 俯视单角色 |
-| `coin.png` | 64×64 | 主体（alpha） | 金币图标（+10 金币） | gpt-image-2.5 俯视单图标 |
-| `potion.png` | 64×64 | 主体（alpha） | 药水图标（+1 瓶，回血 25） | gpt-image-2.5 俯视单图标 |
-| `key.png` | 64×64 | 主体（alpha） | 钥匙图标（+1 把，开铁门） | gpt-image-2.5 俯视单图标 |
-| `stairs.png` | 64×64 | 主体（alpha） | 下行楼梯（踩上去下潜一层） | gpt-image-2.5 俯视单物件 |
-| `door.png` | 64×64 | 主体（alpha） | 铁门（消耗 1 把钥匙打开） | gpt-image-2.5 俯视单物件 |
+源矩形 = `(索引 * 帧宽, 0, 帧宽, 帧高)`，**帧宽是入库图像素**（64），不是显示像素
+（显示 32×32）。取帧索引的纯函数在 `client/src/CrawlerFacing.zan`：
 
-> 几何绘制只出现在界面部件：HUD 血条、消息面板、按钮边框、战斗条——
-> 符合 `docs/REAL_GAME_STANDARD.md` 第 1 节"几何绘制只允许用在界面部件"。
+```
+CrawlerFacing.PlayerFrame(facingRight)   // 0 = 朝右, 1 = 朝左
+CrawlerFacing.PlayerSrcX(facingRight)    // 帧的源 X（源图像素）
+CrawlerFacing.EnemyFrame(facingRight)    // 怪物同上
+```
 
-### 后期处理链
+映射规则与帧数在 `client/tests/crawler_test.zan` 里钉死（往左走 → 帧号变化、
+左右两帧索引不同、上下走不改朝向、怪贴身时面朝玩家）。
 
-1. `gpt-image-2.5` 出 1024×1024 原图（纯黑底、无 alpha）。
-2. Python/PIL 按 **边缘连通暗部洪泛** 抠 alpha（内部暗部保留，不误伤主体阴影）。
-3. 裁到内容边界，等比缩放进 64×64 画布（留 2px 边）。
-4. 地砖/墙不走抠图流程，直接缩放到 64×64（不透明）。
+### 朝向可读性
 
-处理脚本在 `_scratch/process_assets.py`（一次性，不入库；可按上面链条重跑）。
+原图是**正面视角**，光靠镜像看不出朝向，所以 bake 脚本给主体烘了不对称标记：
 
-## 二、音效（`client/assets/sfx/`）
+| 主体 | 标记 | 效果 |
+|---|---|---|
+| 玩家 | 提灯暖光（右下角） | 亮的那一侧 = 朝向的一侧；地面光池也落在那一侧 |
+| 史莱姆 | 偏右的一只眼睛 | 一眼能看出转向 |
+| 骷髅 | 长剑 / 盾左右互换 | 镜像即明显 |
+| 蝙蝠 | 偏右的一只发光独眼 | 小而亮，暗处也看得见 |
+
+## 二、位图（`client/assets/`）
+
+### 主体精灵表（运行时用）
+
+| 文件 | 尺寸 | 用途 |
+|---|---|---|
+| `player_sheet.png` | 128×64 | 玩家（披风探险者）两帧：0 朝右 / 1 朝左 |
+| `slime_sheet.png` | 128×64 | 史莱姆两帧 |
+| `skeleton_sheet.png` | 128×64 | 骷髅两帧 |
+| `bat_sheet.png` | 128×64 | 蝙蝠两帧 |
+
+### 场景与物件
+
+| 文件 | 尺寸 | 类别 | 用途 |
+|---|---|---|---|
+| `floor.png` | 128×128 | 底板（不透明） | 地砖；2×2 放 4 个变体（大石板 + 缝隙 + 苔藓 + 湿渍） |
+| `wall.png` | 128×128 | 底板（不透明） | 岩壁；2×2 放 4 个变体（错缝砌块 + 灰缝 + 顶部高光） |
+| `torch.png` | 32×48 | 主体（alpha） | 墙上的火把（每隔若干格挂一只） |
+| `moss.png` | 32×32 | 主体（alpha） | 地上的苔藓丛 |
+| `puddle.png` | 32×24 | 主体（alpha） | 地上的积水/湿渍 |
+| `door.png` | 64×64 | 主体（alpha） | 铁门（消耗 1 把钥匙打开） |
+| `stairs.png` | 64×64 | 主体（alpha） | 下行楼梯（踩上去下潜一层） |
+| `coin.png` | 64×64 | 主体（alpha） | 金币图标（+10 金币） |
+| `potion.png` | 64×64 | 主体（alpha） | 药水图标（+1 瓶，回血 25） |
+| `key.png` | 64×64 | 主体（alpha） | 钥匙图标（+1 把，开铁门） |
+
+### 效果与 UI 底板
+
+| 文件 | 尺寸 | 用途 |
+|---|---|---|
+| `shadow.png` | 48×24 | 椭圆落地投影（角色 / 怪物脚下） |
+| `glow.png` | 128×128 | 环境暖光（提灯把身边照亮） |
+| `lamp.png` | 64×64 | 提灯光池，落在**朝向的一侧**（朝向提示） |
+| `ui_board.png` | 64×64 | HUD 面板底板（石板 + 铜边 + 铆钉），九宫格 |
+| `ui_button.png` / `_hi` / `_down` | 48×32 | 次要按钮三态，九宫格 |
+| `ui_button_primary.png` / `_hi` / `_down` | 48×32 | 主按钮三态（火把橙），九宫格 |
+
+九宫格切角边长：面板 16px、按钮 12px（与 `client/src/CrawlerView.zan` 的
+`NineSlice` 一致）。**引擎没有 border-image**，CSS 也没有九宫格，所以底板靠
+`CDraw.BlitImage` 裁源矩形自拼 9 块。
+
+### 烘焙源图（不再被运行时加载，只作为 bake 输入）
+
+`player.png` / `slime.png` / `skeleton.png` / `bat.png`（各 64×64，gpt-image-2.5
+生成后抠 alpha）——`bake_facing.py` 的输入。
+
+### 生成脚本（都可重跑）
+
+| 脚本 | 产出 |
+|---|---|
+| `client/tools/bake_facing.py` | 四张两帧朝向精灵表 |
+| `client/tools/bake_tiles.py` | `floor/wall/torch/moss/puddle/shadow/glow/lamp` |
+| `client/tools/bake_ui.py` | `ui_board.png` 与六张按钮底板 |
+
+> 几何绘制只出现在界面部件（血条、战斗条、文字），符合
+> `docs/REAL_GAME_STANDARD.md` 第 1 节"几何绘制只允许用在界面部件"。
+
+## 三、皮肤包（`client/assets/skins/crawler/skin.css`）
+
+地牢风：石板灰底 + 锈金描边 + 火把橙强调。令牌名照
+`packages/Zan.Gui/src/Gui/skins/base.css` 抄，不自造；颜色用 `#AARRGGBB`，
+与画布 `0xAARRGGBB` 同一套。
+
+- 构建拷到 `build/crawler/skins/crawler/`（**exe 同级**，`Gui.Styling.Skin.Roots`
+  查的是 `exe/skins/` 与 `exe/assets/skins/`）；控件基线 `base.css` 一起拷到
+  `build/crawler/skins/`。
+- 启动时 `host.App().UseSkin("dark")` → `UseSkin("crawler")`（顺序反了会被
+  默认皮肤盖回去）。
+- 覆写三处：`:root` 令牌（`--primary` / `--bg-*` / `--text-*` / `--border-*` /
+  `--border-radius-*` / `--font-size-*`）、`button`（含 `:hover` / `:active` /
+  `button.primary`）、`panel.card`（设置浮层那张卡）。
+- 皮肤包里的色值与 `client/src/CrawlerPalette.zan` 一一对应——画布上的 UI 与
+  标准库控件是两套渲染路径，靠同一份色值保持观感统一。
+
+## 四、音效（`client/assets/sfx/`）
 
 全部 **22050 Hz / 16 bit / 单声道 WAV**，单个 <1 s，由 Python 合成。
 
@@ -60,9 +138,10 @@
 播放走公共包 `Game.Foundation.SfxBank`（磁盘优先 + 内嵌兜底 + 限频），
 没有音频设备时整个库静默失效——无头 CI 与没声卡的机器上游戏照常跑。
 
-## 三、授权与红线
+## 五、授权与红线
 
-- 位图：gpt-image-2.5 生成，项目自研加工，无第三方素材引入。
+- 位图：gpt-image-2.5 生成 + 项目自研加工；地砖/墙/UI 底板为程序化生成，
+  无第三方素材引入。
 - 音效：Python 纯合成，无采样库。
 - **不引入** Cataclysm-DDA / Mindustry 等第三方素材：它们是 CC-BY-SA / GPLv3，
   传染性许可与本项目闭源发布口径冲突。本项目只借鉴"回合制地牢探索"这一

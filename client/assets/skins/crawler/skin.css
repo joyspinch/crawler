@@ -1,0 +1,162 @@
+/* skin.css — 地底爬行 · CRAWLER 的地牢风皮肤包。
+ *
+ * 为什么需要它：设置浮层是标准库控件（Panel/Flex/Label/Button），没有
+ * 皮肤包时用的是**系统默认外观**——那张黑卡片 + 灰按钮，和地牢的苔绿 /
+ * 石板 / 锈金拼在一起就是"系统控件 + 地牢场景"的拼贴感。
+ *
+ * 位置：client/assets/skins/crawler/skin.css，构建拷到
+ * build/crawler/skins/crawler/（**与 exe 同级**；Gui.Styling.Skin.Roots
+ * 查的是 exe/skins/ 与 exe/assets/skins/）。启动时
+ * `host.App().UseSkin("crawler")` 应用，**必须在 UseSkin("dark") 之后**，
+ * 否则会被默认皮肤盖回去。
+ *
+ * 令牌名照 packages/Zan.Gui/src/Gui/skins/base.css 抄，不自造：
+ * 颜色用 #AARRGGBB（与画布 0xAARRGGBB 同一套），度量用十进制。
+ * 圆角字段真名是 borderRadiusSmall/Medium/Large（对应 --border-radius-*），
+ * --radius-* 只在本皮肤自己的规则里用，所以两种都写。
+ *
+ * 配色语义与 client/src/CrawlerPalette.zan 一一对应——画布上的 UI 与标准库
+ * 控件是两套渲染路径，靠同一份色值保持观感统一：
+ *   苔绿（生物）· 石板灰（岩体）· 锈金（金属/描边）· 火把橙（光源/强调）
+ *
+ * 引擎限制：CSS 背景只吃颜色与线性渐变，**url() 贴图不支持**（也没有
+ * border-image），所以这里的卡与按钮是纯色/描边风格；画布上的美术底板
+ * 走 client/assets/ui_*.png（九宫格自切），不在本包里。
+ */
+
+:root {
+  --name: "地底爬行";
+  --order: 10;
+  --base: dark;
+  --dark: 1;
+
+  /* —— 强调色：火把橙 —— */
+  --primary: #FFE8913E;
+  --primary-hover: #FFFFC46B;
+  --primary-pressed: #FFB4681F;
+
+  /* —— 文字：骨白 / 石板褐 / 雾灰 —— */
+  --text-primary: #FFE8DFC8;
+  --text-secondary: #FFB9A87E;
+  --text-tertiary: #FF8C8272;
+  --text-disabled: #FF5A544A;
+  --text-inverse: #FF1A120C;
+
+  /* —— 表面：地牢石板 —— */
+  --bg-primary: #FF1E1B18;
+  --bg-secondary: #FF2A2521;
+  --bg-tertiary: #FF342D27;
+  --bg-hover: #FF3E352C;
+  --bg-active: #FF171310;
+  --bg-disabled: #FF241E1A;
+
+  /* —— 描边：锈金 —— */
+  --border-primary: #FF966E3A;
+  --border-secondary: #FF5A4530;
+  --border-hover: #FFC8A15A;
+  --border-focus: #FFFFC46B;
+  --divider: #FF4A3A2A;
+  --shadow-color: #B3000000;
+
+  /* —— 语义色 —— */
+  --success: #FF8FCB86;
+  --success-hover: #FFA9DFA0;
+  --success-pressed: #FF6FA866;
+  --warning: #FFE8C86A;
+  --warning-hover: #FFF6D489;
+  --warning-pressed: #FFA8813C;
+  --error: #FFE05A4A;
+  --error-hover: #FFF08A80;
+  --error-pressed: #FFB04038;
+  --info: #FF7C9AB5;
+  --info-hover: #FF9CB8CE;
+  --info-pressed: #FF5F7D98;
+
+  --scrollbar: #FF5A4530;
+  --tooltip-bg: #FF2A2521;
+  --tooltip-border: #FF966E3A;
+  --tooltip-text: #FFE8DFC8;
+
+  /* —— 度量：石头棱角，小圆角 —— */
+  --border-radius-small: 2;
+  --border-radius-medium: 3;
+  --border-radius-large: 4;
+  --radius-small: 2;
+  --radius-medium: 3;
+  --radius-large: 4;
+
+  --font-size-tiny: 12;
+  --font-size-small: 13;
+  --font-size-medium: 14;
+  --font-size-large: 16;
+  --font-size-huge: 20;
+}
+
+/* ---- 按钮：石台 + 铜边 --------------------------------------------------
+ * 常态是压暗的石板，悬停点亮成苔绿调，按下反色（像被按进石头里）。 */
+button {
+  background: #2A2521;
+  color: #E8DFC8;
+  border: 1 #966E3A;
+  border-radius: var(--radius-small);
+  letter-spacing: 1;
+}
+button:hover {
+  background: #3E352C;
+  border-color: #C8A15A;
+  color: #F4EADA;
+}
+button:active {
+  background: #171310;
+  border-color: #7A5A30;
+  color: #C8BBA0;
+}
+button:focus { border-color: #FFC46B; }
+
+/* 主按钮（当前选中的档位）：火把橙实心 + 深色字。 */
+button.primary {
+  background: #B4681F;
+  color: #1A120C;
+  border: 1 #E8A44E;
+}
+button.primary:hover {
+  background: #E8913E;
+  border-color: #FFC46B;
+  color: #140E04;
+}
+button.primary:active {
+  background: #7E4A18;
+  border-color: #B4681F;
+  color: #1A120C;
+}
+
+/* 禁用：熄成灰石头。 */
+button:disabled {
+  background: #241E1A;
+  color: #5A544A;
+  border: 1 #3A322B;
+}
+
+/* ---- 标签：正文骨白，说明退灰 ------------------------------------------ */
+label {
+  color: #E8DFC8;
+  letter-spacing: 1;
+}
+
+/* ---- 设置浮层那张卡（SettingsOverlay 的内容盒 class = card）------------
+ * 深石板 + 铜边 + 投影，别再是系统默认黑卡片。
+ * `panel.card` 与 `card` 两条都要命中：内容盒是带名字的 Panel
+ * （类型选择器 panel）+ class card。 */
+panel.card, card {
+  background: #E61E1B18;
+  color: #E8DFC8;
+  border: 1 #966E3A;
+  border-radius: var(--radius-medium);
+  box-shadow: 0 8 22 #B3000000;
+  padding: 18px;
+}
+panel.card::title, card::title {
+  color: #C8A15A;
+  font-size: var(--font-size-large);
+}
+panel.card::divider, card::divider { background: #4A3A2A; }

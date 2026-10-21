@@ -32,6 +32,8 @@ public class CrawlerEnemy {
     public int speed;     // 每回合移动几步
     public bool dead;
     public int wait;      // 冷却：史莱姆隔回合动
+    // 朝向：面朝玩家/移动方向（渲染按它取精灵表的左右两帧）。
+    public bool facingRight;
 
     public CrawlerEnemy(int kind, int x, int y, int hp, int maxHp, int dmg, int speed) {
         this.kind = kind;
@@ -43,6 +45,7 @@ public class CrawlerEnemy {
         this.speed = speed;
         this.dead = false;
         this.wait = 0;
+        this.facingRight = true;
     }
 }
 
