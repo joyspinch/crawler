@@ -2,7 +2,7 @@
 #
 # 项目搬到仓库外后，公共包在 zan-lang 仓库（或它的干净 worktree）的
 # packages/ 下；编译要带 --package-project 指向包根。定位顺序：
-#   编译器：显式参数 → $ZANC → $ZAN_HOME → PATH → 包根附近 → 已知仓库位置
+#   编译器：显式参数 → $ZANC → $ZAN_HOME → PATH → 包根附近
 #   stdlib：显式参数 → $ZAN_STDLIB → $ZAN_HOME/stdlib → 包根/stdlib
 #   包根  ：显式参数 → $ZAN_HOME
 function Resolve-CrawlerToolchain {
@@ -26,7 +26,6 @@ function Resolve-CrawlerToolchain {
         $roots += (Split-Path -Parent $PackageProject)
     }
     $roots += $CompilerRoots
-    $roots += @('D:\project\zan-lang')
     foreach ($r in $roots) {
         if ($r) { $candidates += (Join-Path $r 'build/zanc.exe') }
     }

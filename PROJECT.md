@@ -76,7 +76,7 @@ crawler/
 ## 编译
 
 ```powershell
-pwsh -File client/tools/build.ps1 -PackageProject D:\project\zan-lang
+pwsh -File client/tools/build.ps1 -PackageProject "$env:ZAN_HOME"
 ```
 
 `-PackageProject` 指向含 `packages/` 的 zan-lang 仓库（或它的干净 worktree）。
@@ -88,7 +88,7 @@ pwsh -File client/tools/build.ps1 -PackageProject D:\project\zan-lang
 ## 测试
 
 ```powershell
-pwsh -File client/tools/test.ps1 -PackageProject D:\project\zan-lang
+pwsh -File client/tools/test.ps1 -PackageProject "$env:ZAN_HOME"
 ```
 
 三段全绿才算过：
@@ -111,7 +111,7 @@ $out = (Resolve-Path 'build/crawler').Path
 $env:ZAN_UI_OUT = "$out/uidrv"
 $env:CRAWLER_SAVE = "$out/savetest"
 $env:ZAN_UI_SCRIPT = (Resolve-Path 'client/tools/shot_face_right.script').Path
-python D:/project/zan-lang/scripts/shot_window.py "$out/Crawler.exe" "$out/ui_face_right.png" 4.0 "$out"
+python "$env:ZAN_HOME/scripts/shot_window.py" "$out/Crawler.exe" "$out/ui_face_right.png" 4.0 "$out"
 ```
 
 | 脚本 | 产出 | 说明 |
