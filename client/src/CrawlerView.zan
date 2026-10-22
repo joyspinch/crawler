@@ -106,90 +106,15 @@ public class CrawlerView {
         return "";
     }
 
-    // 内嵌兜底的 key 形如 "mem:assets/x.png"，画布直接认这种 key；
-    // 磁盘路径要走 CDraw.BlitSource 注册成内存键再贴。
-    static bool IsMemKey(string key) {
-        return key.Length > 4 && key.Substring(0, 4) == "mem:";
-    }
-
     // ----- 绘制原语 -------------------------------------------------------
-
-    // 把路径解析成画布能贴的 key：磁盘路径走 CDraw.BlitSource 注册成
-    // 内存键（解码缓存由画布持有），内嵌兜底的 "mem:" key 原样使用。
-    string Key(Canvas c, string path) {
-        if (path == "") { return ""; }
-        if (CrawlerView.IsMemKey(path)) { return path; }
-        string key = CDraw.BlitSource(c, path);
-        if (key == null) { return ""; }
-        return key;
-    }
-
-    // 带源矩形取景的贴图（源矩形 0,0,0,0 = 整幅图）。
-    void BlitKey(Canvas c, string key, int dx, int dy, int dw, int dh,
-                 int sx, int sy, int sw, int sh) {
-        if (key == "") { return; }
-        if (dw <= 0 || dh <= 0) { return; }
-        c.BlitImage(key, CDraw.MapX(dx + CDraw.originX), CDraw.MapY(dy + CDraw.originY),
-                    CDraw.MapW(dw), CDraw.MapW(dh), sx, sy, sw, sh);
-    }
-
-    void Blit(Canvas c, string path, int dx, int dy, int dw, int dh,
-              int sx, int sy, int sw, int sh) {
-        this.BlitKey(c, this.Key(c, path), dx, dy, dw, dh, sx, sy, sw, sh);
-    }
-
-    // 九宫格贴图：把源图切成 9 块拼到目标矩形（四角原样、边横竖拉伸、
-    // 中间平铺）。引擎没有 border-image，CSS 也没有九宫格，底板只能自切。
-    void NineSlice(Canvas c, string path, int x, int y, int w, int h, int corner) {
-        if (w <= 0 || h <= 0) { return; }
-        string key = this.Key(c, path);
-        if (key == "") { return; }
-        int iw = Canvas.ImageWidth(key);
-        int ih = Canvas.ImageHeight(key);
-        if (iw <= 0 || ih <= 0) { return; }
-        int cnr = corner;
-        if (cnr > iw / 2) { cnr = iw / 2; }
-        if (cnr > ih / 2) { cnr = ih / 2; }
-        if (cnr > w / 2) { cnr = w / 2; }
-        if (cnr > h / 2) { cnr = h / 2; }
-        if (cnr <= 0) { return; }
-        int mw = iw - cnr * 2;
-        int mh = ih - cnr * 2;
-        int dw = w - cnr * 2;
-        int dh = h - cnr * 2;
-        // 四角：原样贴。
-        this.BlitKey(c, key, x, y, cnr, cnr, 0, 0, cnr, cnr);
-        this.BlitKey(c, key, x + w - cnr, y, cnr, cnr, iw - cnr, 0, cnr, cnr);
-        this.BlitKey(c, key, x, y + h - cnr, cnr, cnr, 0, ih - cnr, cnr, cnr);
-        this.BlitKey(c, key, x + w - cnr, y + h - cnr, cnr, cnr,
-            iw - cnr, ih - cnr, cnr, cnr);
-        // 四边：横边横拉、竖边竖拉。
-        this.BlitKey(c, key, x + cnr, y, dw, cnr, cnr, 0, mw, cnr);
-        this.BlitKey(c, key, x + cnr, y + h - cnr, dw, cnr, cnr, ih - cnr, mw, cnr);
-        this.BlitKey(c, key, x, y + cnr, cnr, dh, 0, cnr, cnr, mh);
-        this.BlitKey(c, key, x + w - cnr, y + cnr, cnr, dh, iw - cnr, cnr, cnr, mh);
-        // 中间：整块拉伸（底板中间是纯色，拉伸不会变形）。
-        this.BlitKey(c, key, x + cnr, y + cnr, dw, dh, cnr, cnr, mw, mh);
-    }
-
-    void Text(Canvas c, string s, int x, int y, int size, int color) {
-        if (s == null || s == "") { return; }
-        c.DrawText(CDraw.MapX(x + CDraw.originX), CDraw.MapY(y + CDraw.originY),
-                   s, color, CDraw.MapW(size));
-    }
-
-    // 带描边的文字：先在偏移处画一层暗影，再画正文，压在游戏画面上也读得清。
-    void TextOutlined(Canvas c, string s, int x, int y, int size, int color) {
-        if (s == null || s == "") { return; }
-        this.Text(c, s, x + 1, y + 2, size, CrawlerPalette.TextShadow);
-        this.Text(c, s, x, y, size, color);
-    }
-
-    void TextCentered(Canvas c, string s, int cx, int y, int size, int color) {
-        if (s == null || s == "") { return; }
-        int tw = c.MeasureText(s, CDraw.MapW(size));
-        this.TextOutlined(c, s, cx - tw / 2, y, size, color);
-    }
+    //
+    // 九宫格切图、裁源贴图、文字（普通/投影/居中）都归公共包：
+    // CKitSlice.NineSlice / CDraw.BlitImageSrc / CText.DrawShadowPx。此前
+    // 这一件事在 8 个游戏项目各写一份，签名漂成 8 种，投影偏移也各写各的。
+    //
+    // 素材解析（磁盘优先 → 内嵌兜底 → 空串）在 Asset() 里，那是资源策略
+    // 不是绘制原语；包里 CDraw.BlitSource 现在也认 "mem:" 键，所以内嵌
+    // 兜底出来的键可以直接贴。
 
     void Fill(Canvas c, int x, int y, int w, int h, int color) {
         CDraw.FillRect(c, x, y, w, h, color);
@@ -203,7 +128,7 @@ public class CrawlerView {
     // 面板底板：有美术底板用底板，没有退回半透明圆角矩形。
     void Panel(Canvas c, int x, int y, int w, int h) {
         if (this.boardPath != "") {
-            this.NineSlice(c, this.boardPath, x, y, w, h, CrawlerView.BoardCorner);
+            CKitSlice.NineSlice(c, this.boardPath, x, y, w, h, CrawlerView.BoardCorner);
             return;
         }
         this.FillRound(c, x, y, w, h, 6, CrawlerPalette.PanelBgSoft);
@@ -242,7 +167,7 @@ public class CrawlerView {
     void DrawTile(Canvas c, int kind, int px, int py, int variant, int mx, int my) {
         if (kind == CrawlerMap.Wall) {
             if (this.wallPath != "") {
-                this.Blit(c, this.wallPath, px, py, CrawlerView.Tile, CrawlerView.Tile,
+                CDraw.BlitImageSrc(c, this.wallPath, px, py, CrawlerView.Tile, CrawlerView.Tile,
                     (variant % 2) * CrawlerView.VariantSize, (variant / 2) * CrawlerView.VariantSize,
                     CrawlerView.VariantSize, CrawlerView.VariantSize);
             } else {
@@ -252,7 +177,7 @@ public class CrawlerView {
         }
         if (kind == CrawlerMap.Door) {
             if (this.doorPath != "") {
-                this.Blit(c, this.doorPath, px, py, CrawlerView.Tile, CrawlerView.Tile, 0, 0, 0, 0);
+                CDraw.BlitImageSrc(c, this.doorPath, px, py, CrawlerView.Tile, CrawlerView.Tile, 0, 0, 0, 0);
             } else {
                 this.Fill(c, px, py, CrawlerView.Tile, CrawlerView.Tile, CrawlerPalette.DoorWood);
             }
@@ -260,14 +185,14 @@ public class CrawlerView {
         }
         if (kind == CrawlerMap.Stairs) {
             if (this.stairsPath != "") {
-                this.Blit(c, this.stairsPath, px, py, CrawlerView.Tile, CrawlerView.Tile, 0, 0, 0, 0);
+                CDraw.BlitImageSrc(c, this.stairsPath, px, py, CrawlerView.Tile, CrawlerView.Tile, 0, 0, 0, 0);
             } else {
                 this.Fill(c, px, py, CrawlerView.Tile, CrawlerView.Tile, CrawlerPalette.StairHole);
             }
             return;
         }
         if (this.floorPath != "") {
-            this.Blit(c, this.floorPath, px, py, CrawlerView.Tile, CrawlerView.Tile,
+            CDraw.BlitImageSrc(c, this.floorPath, px, py, CrawlerView.Tile, CrawlerView.Tile,
                 (variant % 2) * CrawlerView.VariantSize, (variant / 2) * CrawlerView.VariantSize,
                 CrawlerView.VariantSize, CrawlerView.VariantSize);
         } else {
@@ -282,14 +207,14 @@ public class CrawlerView {
             // 火把：只在"下方是地板"的墙上挂（挂太高看不见），每 9 格一处。
             if (this.torchPath == "") { return; }
             if (h % 9 != 0) { return; }
-            this.Blit(c, this.torchPath, px + 7, py - 6, 18, 27, 0, 0, 0, 0);
+            CDraw.BlitImageSrc(c, this.torchPath, px + 7, py - 6, 18, 27, 0, 0, 0, 0);
             return;
         }
         if (this.mossPath != "" && h % 11 == 0) {
-            this.Blit(c, this.mossPath, px + 3, py + 4, 26, 26, 0, 0, 0, 0);
+            CDraw.BlitImageSrc(c, this.mossPath, px + 3, py + 4, 26, 26, 0, 0, 0, 0);
         }
         if (this.puddlePath != "" && h % 13 == 3) {
-            this.Blit(c, this.puddlePath, px + 3, py + 8, 26, 20, 0, 0, 0, 0);
+            CDraw.BlitImageSrc(c, this.puddlePath, px + 3, py + 8, 26, 20, 0, 0, 0, 0);
         }
     }
 
@@ -328,7 +253,7 @@ public class CrawlerView {
         else if (it.kind == CrawlerEntities.KeyItem) { path = this.keyPath; }
         else { path = this.coinPath; }
         if (path != "") {
-            this.Blit(c, path, px + 4, py + 4, 24, 24, 0, 0, 0, 0);
+            CDraw.BlitImageSrc(c, path, px + 4, py + 4, 24, 24, 0, 0, 0, 0);
             return;
         }
         if (it.kind == CrawlerEntities.PotionItem) { this.Fill(c, px + 8, py + 8, 16, 16, CrawlerPalette.Potion); }
@@ -340,7 +265,7 @@ public class CrawlerView {
     void DrawShadow(Canvas c, int px, int py, int w) {
         if (this.shadowPath == "") { return; }
         int h = w / 2;
-        this.Blit(c, this.shadowPath, px + CrawlerView.Tile / 2 - w / 2,
+        CDraw.BlitImageSrc(c, this.shadowPath, px + CrawlerView.Tile / 2 - w / 2,
             py + CrawlerView.Tile - h + 2, w, h, 0, 0, 0, 0);
     }
 
@@ -350,7 +275,7 @@ public class CrawlerView {
         else if (e.kind == CrawlerEntities.BatKind) { path = this.batPath; }
         this.DrawShadow(c, px, py, 26);
         if (path != "") {
-            this.Blit(c, path, px, py, CrawlerView.Tile, CrawlerView.Tile,
+            CDraw.BlitImageSrc(c, path, px, py, CrawlerView.Tile, CrawlerView.Tile,
                 CrawlerFacing.EnemySrcX(e.facingRight), 0,
                 CrawlerFacing.EnemyFrameW, CrawlerFacing.EnemyFrameH);
         } else {
@@ -409,13 +334,13 @@ public class CrawlerView {
         // 火光：提灯把身边照亮（"地牢里有光源"的感觉）。
         if (this.glowPath != "") {
             int rr = (g.visionRadius + 1) * CrawlerView.Tile;
-            this.Blit(c, this.glowPath, ppx + CrawlerView.Tile / 2 - rr,
+            CDraw.BlitImageSrc(c, this.glowPath, ppx + CrawlerView.Tile / 2 - rr,
                 ppy + CrawlerView.Tile / 2 - rr, rr * 2, rr * 2, 0, 0, 0, 0);
         }
         // 提灯的光池落在朝向的一侧——玩家面朝哪边，一眼看得出来。
         if (this.lampPath != "") {
             int dir = g.facingRight ? 1 : -1;
-            this.Blit(c, this.lampPath, ppx + CrawlerView.Tile / 2 + dir * 13 - 26,
+            CDraw.BlitImageSrc(c, this.lampPath, ppx + CrawlerView.Tile / 2 + dir * 13 - 26,
                 ppy + CrawlerView.Tile / 2 - 26, 52, 52, 0, 0, 0, 0);
         }
         for (int i = 0; i < g.enemies.Count; i = i + 1) {
@@ -428,7 +353,7 @@ public class CrawlerView {
         }
         this.DrawShadow(c, ppx, ppy, 28);
         if (this.playerPath != "") {
-            this.Blit(c, this.playerPath, ppx, ppy, CrawlerView.Tile, CrawlerView.Tile,
+            CDraw.BlitImageSrc(c, this.playerPath, ppx, ppy, CrawlerView.Tile, CrawlerView.Tile,
                 CrawlerFacing.PlayerSrcX(g.facingRight), 0,
                 CrawlerFacing.PlayerFrameW, CrawlerFacing.PlayerFrameH);
         } else {
@@ -454,19 +379,19 @@ public class CrawlerView {
 
     void DrawHud(Canvas c, int w, CrawlerGame g) {
         this.Panel(c, 10, 6, w - 20, 60);
-        this.TextOutlined(c, "地底爬行 · CRAWLER", 26, 12, 20, CrawlerPalette.RustGold);
-        this.TextOutlined(c, "第 " + Convert.ToString(g.depth) + " 层 / 目标第 "
-            + Convert.ToString(CrawlerGame.GoalDepth) + " 层", 300, 16, 16, CrawlerPalette.SlateText);
+        CText.DrawShadowPx(c, "地底爬行 · CRAWLER", 26, 12, 20, CrawlerPalette.RustGold, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "第 " + Convert.ToString(g.depth) + " 层 / 目标第 "
+            + Convert.ToString(CrawlerGame.GoalDepth) + " 层", 300, 16, 16, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
         this.Bar(c, 26, 40, 220, 14, g.hp, g.maxHp, CrawlerPalette.Hp);
-        this.TextOutlined(c, "HP " + Convert.ToString(g.hp) + "/" + Convert.ToString(g.maxHp),
-            256, 39, 15, CrawlerPalette.Parchment);
-        this.TextOutlined(c, "金币 " + Convert.ToString(g.gold), 400, 39, 15, CrawlerPalette.Gold);
-        this.TextOutlined(c, "钥匙 " + Convert.ToString(g.keys), 520, 39, 15, CrawlerPalette.KeyGold);
-        this.TextOutlined(c, "药水 " + Convert.ToString(g.potions), 630, 39, 15, CrawlerPalette.Potion);
-        this.TextOutlined(c, "击杀 " + Convert.ToString(g.kills), 730, 39, 15, CrawlerPalette.SlateText);
-        this.TextOutlined(c, "回合 " + Convert.ToString(g.turn), 830, 39, 15, CrawlerPalette.SlateText);
-        this.TextOutlined(c, "本层剩余 " + Convert.ToString(g.AliveEnemies()) + " 怪",
-            940, 39, 15, CrawlerPalette.SlateText);
+        CText.DrawShadowPx(c, "HP " + Convert.ToString(g.hp) + "/" + Convert.ToString(g.maxHp),
+            256, 39, 15, CrawlerPalette.Parchment, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "金币 " + Convert.ToString(g.gold), 400, 39, 15, CrawlerPalette.Gold, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "钥匙 " + Convert.ToString(g.keys), 520, 39, 15, CrawlerPalette.KeyGold, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "药水 " + Convert.ToString(g.potions), 630, 39, 15, CrawlerPalette.Potion, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "击杀 " + Convert.ToString(g.kills), 730, 39, 15, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "回合 " + Convert.ToString(g.turn), 830, 39, 15, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "本层剩余 " + Convert.ToString(g.AliveEnemies()) + " 怪",
+            940, 39, 15, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
     }
 
     // 底部：消息日志 + 怪物情报 + 操作提示（或战斗面板）。
@@ -476,18 +401,18 @@ public class CrawlerView {
         if (panelY < floorY) { panelY = floorY; }
         // 左：消息日志。
         this.Panel(c, 10, panelY, 680, 120);
-        this.TextOutlined(c, "地牢回响", 26, panelY + 8, 15, CrawlerPalette.RustGold);
+        CText.DrawShadowPx(c, "地牢回响", 26, panelY + 8, 15, CrawlerPalette.RustGold, CrawlerPalette.TextShadow, 1, 2);
         int i = 0;
         for (int k = g.log.Count - 1; k >= 0 && i < 4; k = k - 1) {
             int fade = 0xE8DFC8 - i * 0x30;
             int col = 0xFF000000 | (fade & 0xFFFFFF);
-            this.TextOutlined(c, g.log[k], 26, panelY + 32 + i * 21, 15, col);
+            CText.DrawShadowPx(c, g.log[k], 26, panelY + 32 + i * 21, 15, col, CrawlerPalette.TextShadow, 1, 2);
             i = i + 1;
         }
         // 右：本层怪物情报。
         int bx = w - 330;
         this.Panel(c, bx, panelY, 320, 120);
-        this.TextOutlined(c, "本层怪物", bx + 16, panelY + 8, 15, CrawlerPalette.RustGold);
+        CText.DrawShadowPx(c, "本层怪物", bx + 16, panelY + 8, 15, CrawlerPalette.RustGold, CrawlerPalette.TextShadow, 1, 2);
         int[] kinds = new int[] { CrawlerEntities.SlimeKind, CrawlerEntities.SkeletonKind,
             CrawlerEntities.BatKind };
         for (int k = 0; k < kinds.Length; k = k + 1) {
@@ -495,13 +420,13 @@ public class CrawlerView {
             string line = CrawlerEntities.EnemyName(kind) + "  HP "
                 + Convert.ToString(CrawlerEntities.EnemyHp(kind, g.depth))
                 + "  伤害 " + Convert.ToString(CrawlerEntities.EnemyDamage(kind, g.depth));
-            this.TextOutlined(c, line, bx + 16, panelY + 32 + k * 21, 14, CrawlerPalette.SlateText);
+            CText.DrawShadowPx(c, line, bx + 16, panelY + 32 + k * 21, 14, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
         }
         // 底部操作提示。
-        this.TextOutlined(c, "方向键 / WASD 移动    空格 攻击    F 喝药    R 逃跑    Esc 设置",
-            26, panelY + 128, 15, CrawlerPalette.Mist);
-        this.TextOutlined(c, "走到楼梯就下潜一层；怪越来越多，也越来越疼。",
-            26, panelY + 150, 14, CrawlerPalette.Mist);
+        CText.DrawShadowPx(c, "方向键 / WASD 移动    空格 攻击    F 喝药    R 逃跑    Esc 设置",
+            26, panelY + 128, 15, CrawlerPalette.Mist, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "走到楼梯就下潜一层；怪越来越多，也越来越疼。",
+            26, panelY + 150, 14, CrawlerPalette.Mist, CrawlerPalette.TextShadow, 1, 2);
         if (g.state == CrawlerGame.Combat && g.foe != null) {
             this.DrawCombatBar(c, w, h, g, g.foe, panelY);
         }
@@ -512,14 +437,14 @@ public class CrawlerView {
         int bx = w / 2 - bw / 2;
         int by = panelY - 24;
         this.Panel(c, bx, by, bw, 96);
-        this.TextOutlined(c, "战斗：" + CrawlerEntities.EnemyName(foe.kind),
-            bx + 20, by + 10, 18, CrawlerPalette.HpSoft);
+        CText.DrawShadowPx(c, "战斗：" + CrawlerEntities.EnemyName(foe.kind),
+            bx + 20, by + 10, 18, CrawlerPalette.HpSoft, CrawlerPalette.TextShadow, 1, 2);
         this.Bar(c, bx + 150, by + 14, 260, 14, foe.hp, foe.maxHp, CrawlerPalette.Hp);
-        this.TextOutlined(c, foe.hp + "/" + Convert.ToString(foe.maxHp)
-            + "   伤害 " + Convert.ToString(foe.dmg), bx + 420, by + 13, 15, CrawlerPalette.Parchment);
-        this.TextOutlined(c, "空格 攻击    F 喝药    R 逃跑    你 HP "
+        CText.DrawShadowPx(c, foe.hp + "/" + Convert.ToString(foe.maxHp)
+            + "   伤害 " + Convert.ToString(foe.dmg), bx + 420, by + 13, 15, CrawlerPalette.Parchment, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "空格 攻击    F 喝药    R 逃跑    你 HP "
             + Convert.ToString(g.hp) + "/" + Convert.ToString(g.maxHp),
-            bx + 20, by + 44, 15, CrawlerPalette.SlateText);
+            bx + 20, by + 44, 15, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
     }
 
     // 游戏中画面：地图 + HUD + 底部面板。
@@ -540,27 +465,27 @@ public class CrawlerView {
         if (this.floorPath != "") {
             for (int ty = 0; ty < h / 64 + 1; ty = ty + 1) {
                 for (int tx = 0; tx < w / 64 + 1; tx = tx + 1) {
-                    this.Blit(c, this.floorPath, tx * 64, ty * 64, 64, 64,
+                    CDraw.BlitImageSrc(c, this.floorPath, tx * 64, ty * 64, 64, 64,
                         (tx % 2) * CrawlerView.VariantSize, (ty % 2) * CrawlerView.VariantSize,
                         CrawlerView.VariantSize, CrawlerView.VariantSize);
                 }
             }
             this.Fill(c, 0, 0, w, h, CrawlerPalette.MenuMask);
         }
-        this.TextCentered(c, "地底爬行 · CRAWLER", w / 2, 150, 52, CrawlerPalette.RustGold);
-        this.TextCentered(c, "回合制地牢探险 —— 走到底，深到第 5 层就是胜利",
-            w / 2, 216, 18, CrawlerPalette.SlateText);
+        CText.DrawCenteredShadowPx(c, "地底爬行 · CRAWLER", w / 2, 150, 52, CrawlerPalette.RustGold, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawCenteredShadowPx(c, "回合制地牢探险 —— 走到底，深到第 5 层就是胜利",
+            w / 2, 216, 18, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
         int bx = w / 2 - 200;
         this.Panel(c, bx, 268, 400, 132);
-        this.TextOutlined(c, "累计战绩", bx + 24, 282, 18, CrawlerPalette.RustGold);
-        this.TextOutlined(c, "最深层数    " + Convert.ToString(bestDepth), bx + 24, 312, 16, CrawlerPalette.Parchment);
-        this.TextOutlined(c, "累计金币    " + Convert.ToString(totalGold), bx + 24, 336, 16, CrawlerPalette.Parchment);
-        this.TextOutlined(c, "累计击杀    " + Convert.ToString(totalKills), bx + 214, 312, 16, CrawlerPalette.Parchment);
-        this.TextOutlined(c, "通关次数    " + Convert.ToString(clears), bx + 214, 336, 16, CrawlerPalette.Parchment);
-        this.TextOutlined(c, "开局次数    " + Convert.ToString(runs), bx + 24, 360, 16, CrawlerPalette.Parchment);
-        this.TextCentered(c, "方向键 / WASD 移动    空格攻击    F 喝药    R 逃跑",
-            w / 2, 430, 16, CrawlerPalette.Mist);
-        this.TextCentered(c, "Esc 打开设置", w / 2, 456, 14, CrawlerPalette.Mist);
+        CText.DrawShadowPx(c, "累计战绩", bx + 24, 282, 18, CrawlerPalette.RustGold, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "最深层数    " + Convert.ToString(bestDepth), bx + 24, 312, 16, CrawlerPalette.Parchment, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "累计金币    " + Convert.ToString(totalGold), bx + 24, 336, 16, CrawlerPalette.Parchment, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "累计击杀    " + Convert.ToString(totalKills), bx + 214, 312, 16, CrawlerPalette.Parchment, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "通关次数    " + Convert.ToString(clears), bx + 214, 336, 16, CrawlerPalette.Parchment, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "开局次数    " + Convert.ToString(runs), bx + 24, 360, 16, CrawlerPalette.Parchment, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawCenteredShadowPx(c, "方向键 / WASD 移动    空格攻击    F 喝药    R 逃跑",
+            w / 2, 430, 16, CrawlerPalette.Mist, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawCenteredShadowPx(c, "Esc 打开设置", w / 2, 456, 14, CrawlerPalette.Mist, CrawlerPalette.TextShadow, 1, 2);
     }
 
     // ----- 结算 -----------------------------------------------------------
@@ -572,20 +497,20 @@ public class CrawlerView {
         int by = 150;
         this.Panel(c, bx, by, 520, 420);
         bool won = g.state == CrawlerGame.Won;
-        this.TextCentered(c, won ? "探险成功" : "你死了", w / 2, by + 26, 40,
-            won ? CrawlerPalette.Success : CrawlerPalette.Danger);
-        this.TextCentered(c, "第 " + Convert.ToString(g.depth) + " 层 · 回合 "
+        CText.DrawCenteredShadowPx(c, won ? "探险成功" : "你死了", w / 2, by + 26, 40,
+            won ? CrawlerPalette.Success : CrawlerPalette.Danger, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawCenteredShadowPx(c, "第 " + Convert.ToString(g.depth) + " 层 · 回合 "
             + Convert.ToString(g.turn) + " · 用时 "
             + Convert.ToString(g.ElapsedMs() / 1000) + " 秒",
-            w / 2, by + 82, 17, CrawlerPalette.Parchment);
+            w / 2, by + 82, 17, CrawlerPalette.Parchment, CrawlerPalette.TextShadow, 1, 2);
         int ly = by + 124;
-        this.TextOutlined(c, "本局击杀      " + Convert.ToString(g.kills), bx + 40, ly, 17, CrawlerPalette.Parchment);
-        this.TextOutlined(c, "本局金币      " + Convert.ToString(g.gold), bx + 40, ly + 30, 17, CrawlerPalette.Parchment);
-        this.TextOutlined(c, "累计最深层数  " + Convert.ToString(bestDepth), bx + 40, ly + 60, 17, CrawlerPalette.SlateText);
-        this.TextOutlined(c, "累计金币      " + Convert.ToString(totalGold), bx + 40, ly + 90, 17, CrawlerPalette.SlateText);
-        this.TextOutlined(c, "累计击杀      " + Convert.ToString(totalKills), bx + 272, ly + 60, 17, CrawlerPalette.SlateText);
-        this.TextOutlined(c, "通关次数      " + Convert.ToString(clears), bx + 272, ly + 90, 17, CrawlerPalette.SlateText);
-        this.TextOutlined(c, "开局次数      " + Convert.ToString(runs), bx + 272, ly + 120, 17, CrawlerPalette.SlateText);
+        CText.DrawShadowPx(c, "本局击杀      " + Convert.ToString(g.kills), bx + 40, ly, 17, CrawlerPalette.Parchment, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "本局金币      " + Convert.ToString(g.gold), bx + 40, ly + 30, 17, CrawlerPalette.Parchment, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "累计最深层数  " + Convert.ToString(bestDepth), bx + 40, ly + 60, 17, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "累计金币      " + Convert.ToString(totalGold), bx + 40, ly + 90, 17, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "累计击杀      " + Convert.ToString(totalKills), bx + 272, ly + 60, 17, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "通关次数      " + Convert.ToString(clears), bx + 272, ly + 90, 17, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
+        CText.DrawShadowPx(c, "开局次数      " + Convert.ToString(runs), bx + 272, ly + 120, 17, CrawlerPalette.SlateText, CrawlerPalette.TextShadow, 1, 2);
     }
 
     // ----- 按钮 -----------------------------------------------------------
@@ -604,7 +529,7 @@ public class CrawlerView {
             else if (hover) { path = this.buttonHoverPath; }
         }
         if (path != "") {
-            this.NineSlice(c, path, x, y, w, h, CrawlerView.ButtonCorner);
+            CKitSlice.NineSlice(c, path, x, y, w, h, CrawlerView.ButtonCorner);
         } else {
             int bg = primary ? CrawlerPalette.ButtonPrimary : CrawlerPalette.ButtonFace;
             if (hover) { bg = primary ? CrawlerPalette.Torch : CrawlerPalette.ButtonFaceHover; }
@@ -615,6 +540,6 @@ public class CrawlerView {
                 CrawlerPalette.ButtonEdge & 0xFF, 255);
         }
         int text = primary ? CrawlerPalette.TextInk : CrawlerPalette.Parchment;
-        this.TextCentered(c, label, x + w / 2, y + h / 2 - 11, 18, text);
+        CText.DrawCenteredShadowPx(c, label, x + w / 2, y + h / 2 - 11, 18, text, CrawlerPalette.TextShadow, 1, 2);
     }
 }
